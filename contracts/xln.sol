@@ -1,7 +1,12 @@
 pragma solidity >=0.4.25;
 pragma experimental ABIEncoderV2;
 
+import "./ConvertLib.sol";
+
 contract XLN {
+    enum ActionChoices { GoLeft, GoRight, GoStraight, SitStill }
+
+
   struct Asset{
     string name;
   }
@@ -40,10 +45,15 @@ contract XLN {
 
   Asset[] public assets;
   
-  event L(string);
+  //event L(string);
+  event L(bytes);
+  //event L(bytes, bytes);
+  //event L(string, string);
+
+
   constructor() public {
       
-    emit L("go");
+    //emit L("go");
     
     users[msg.sender].standalone[0] = 1000000000000;
 
@@ -64,7 +74,11 @@ contract XLN {
   }
   
   
-  
+  function append(string memory a, string memory b, string memory c, string memory d, string  memory e) internal pure returns (string memory) {
+
+    return string(abi.encodePacked(a, b, c, d, e));
+
+} 
   function depositToChannel(address a1, address a2, uint assetId, uint amount) public returns (Coverage memory cov) {
     require(users[msg.sender].standalone[0] >= amount);
     users[msg.sender].standalone[0] -= amount;
@@ -77,26 +91,51 @@ contract XLN {
     if (a1 < a2) {
       cov.ondelta += amount;
     }
-    emit L("deposit");
+    //emit L('hi','f');
+    //emit L("deposit");
 
 
     return cov;
  
   }
+
   
   
-  function withdrawFromChannel(address a2, uint assetId, uint amount) public {
+  function nest(uint[][] memory nested) public {
+
+    emit L(abi.encode(nested));
+      //emit L(string(abi.encodePacked(nested)));
+
+  }
+
+  function withdrawFromChannel(address a2, uint[][] memory nested_asset_amount, bytes memory sig) public {
     address a1 = msg.sender;
-    Coverage storage cov = channels[channelKey(a1, a2)].coverages[assetId];
+    bytes32 msgHash = ConvertLib.toEthSignedMessageHash(keccak256(abi.encode(nested_asset_amount)));
 
-    require (cov.collateral >= amount);
+    emit L(abi.encode(nested_asset_amount));
+    emit L(abi.encodePacked(ConvertLib.recover(msgHash, sig)));
 
 
-    cov.collateral -= amount;
-    if (a1 < a2) cov.ondelta -= amount;
+    for (uint i = 0; i < nested_asset_amount.length; i++) {
 
-    users[a1].standalone[assetId] += amount;
-    emit L('withdraw');
+      uint assetId = nested_asset_amount[i][0];
+      uint amountToWithdraw = nested_asset_amount[i][1];
+
+
+
+
+      Coverage storage cov = channels[channelKey(a1, a2)].coverages[assetId];
+
+      require (cov.collateral >= amountToWithdraw);
+
+
+      cov.collateral -= amountToWithdraw;
+      if (a1 < a2) cov.ondelta -= amountToWithdraw;
+
+      users[a1].standalone[assetId] += amountToWithdraw;
+
+      //emit L(ConvertLib.uint2str(assetId)+"-"+ConvertLib.uint2str(amountToWithdraw));
+    }
   }
 
 
