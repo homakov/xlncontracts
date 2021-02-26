@@ -1,5 +1,11 @@
 module.exports = {
-  // Uncommenting the defaults below 
+
+  compilers: {
+    solc: {
+      version: "^0.8.0"
+    }
+      
+  }   // Uncommenting the defaults below 
   // provides for an easier quick-start with Ganache.
   // You can also follow this format for other networks;
   // see <http://truffleframework.com/docs/advanced/configuration>

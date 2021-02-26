@@ -60,31 +60,46 @@ contract('MetaCoin', (accounts,b,c,d) => {
     assert.equal('200', cov.collateral)
     assert.equal('100', cov.ondelta)
 
-    let go = [[0,100]]
+    let amounts = [0, 10, 0, 20]
 
-    console.log('sol encoded',(await X.nest(go)).logs);
+    let chKey = await X.channelKey(accounts[0],accounts[1])
 
-    msg=web3.eth.abi.encodeParameters(['uint[][]'], [go]);
+    withdraw_nonce = (await X.getChannel(accounts[0],accounts[1])).toNumber()
+    msg=web3.eth.abi.encodeParameters(['bytes','uint','uint[]'], [chKey,withdraw_nonce, amounts]);
     console.log('we encoded',msg)
 
-    sig=web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0]);
-//curl -X POST --data '{"jsonrpc":"2.0","method":"eth_sign","params":["0x9b2055d370f73ec7d8a03e965129118dc8f5bf83", "0xdeadbeaf"],"id":1}'
 
+    //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: chKey}, {t: 'uint[][]', v: go}))
+
+    sig=web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0]);
+ 
     //assert.equal(accounts[0],web3.eth.accounts.recover(msg, sig.signature))
 
+    let logy = (res)=>{console.log(res.logs.map(l=>l.args['0']+": "+l.args['1']))}
 
-    console.log(sig)
-    res = await X.withdrawFromChannel(accounts[1], [[0,100]], sig.signature) // 
-    console.log(res.logs)
-    console.log(res.receipt.logs)
-    console.log('raw',res.receipt.rawLogs)
+
+cov = await X.getCoverage(accounts[0], accounts[1], 0);
+    console.log(cov)
+
+    logy(await X.withdrawFromChannel(accounts[0], amounts, sig.signature, {from: accounts[1]}))
+cov = await X.getCoverage(accounts[0], accounts[1], 0);
+    console.log(cov)
+
+    withdraw_nonce = (await X.getChannel(accounts[0],accounts[1])).toNumber()
+    msg=web3.eth.abi.encodeParameters(['bytes','uint','uint[]'], [chKey,withdraw_nonce, amounts]);
+    console.log('we encoded',msg)
+    sig=web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0]);
+
+    logy(await X.withdrawFromChannel(accounts[0], amounts, sig.signature, {from: accounts[1]}))
+cov = await X.getCoverage(accounts[0], accounts[1], 0);
+    console.log(cov)
+    console.log(res.logs.map(l=>l.args['0']+l.args['1']))
 
 
     return
-
     assert.equal('999999999900', (await X.getUser(accounts[0])).toString())
     cov = await X.getCoverage(accounts[0], accounts[1], 0);
-
+    console.log(cov)
     assert.equal('100', cov.collateral)
     assert.equal('0', cov.ondelta)
 

@@ -1,10 +1,13 @@
-pragma solidity >=0.4.25;
+pragma solidity ^0.8.0;
 pragma experimental ABIEncoderV2;
 
 import "./ConvertLib.sol";
+import "./ECDSA.sol";
+import "./console.sol";
 
-contract XLN {
-    enum ActionChoices { GoLeft, GoRight, GoStraight, SitStill }
+contract XLN is Console{
+  
+  enum ActionChoices { GoLeft, GoRight, GoStraight, SitStill }
 
 
   struct Asset{
@@ -30,10 +33,10 @@ contract XLN {
   }
   
   struct Channel{
-    mapping (uint => Coverage) coverages;
-    
+    uint withdraw_nonce;
     uint dispute_nonce;
-    uint withdrawal_nonce;
+
+    mapping (uint => Coverage) coverages;    
   }
 
   address ad1 = 0x627306090abaB3A6e1400e9345bC60c78a8BEf57;
@@ -108,36 +111,50 @@ contract XLN {
 
   }
 
-  function withdrawFromChannel(address a2, uint[][] memory nested_asset_amount, bytes memory sig) public {
+  // we need to provide counterparty address to compile encoded message
+  //even though we get signer address returned by ecrecover
+
+  function withdrawFromChannel(address a2, uint[] memory nested, bytes memory sig) public {
     address a1 = msg.sender;
-    bytes32 msgHash = ConvertLib.toEthSignedMessageHash(keccak256(abi.encode(nested_asset_amount)));
 
-    emit L(abi.encode(nested_asset_amount));
-    emit L(abi.encodePacked(ConvertLib.recover(msgHash, sig)));
+    bytes memory chKey = channelKey(a1, a2);
 
 
-    for (uint i = 0; i < nested_asset_amount.length; i++) {
-
-      uint assetId = nested_asset_amount[i][0];
-      uint amountToWithdraw = nested_asset_amount[i][1];
+    bytes memory encoded_msg = abi.encode(chKey, channels[chKey].withdraw_nonce++, nested);
 
 
+    bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
 
+    log('encoded msg',encoded_msg);
+    /*
+    log('encoded msg hash',keccak256(encoded_msg));
+    log('eth hash',hash);*/
+
+    // ensure actual signer is provided counterparty address
+
+    address signer = ECDSA.recover(hash, sig);
+    log('signer', signer);
+
+    require(a2 == signer, "Invalid signer");
+
+
+    for (uint i = 0; i < nested.length; i+=2) {
+      uint assetId = nested[i];
+      uint amountToWithdraw = nested[i+1];
 
       Coverage storage cov = channels[channelKey(a1, a2)].coverages[assetId];
 
-      require (cov.collateral >= amountToWithdraw);
+      if (cov.collateral >= amountToWithdraw) {
+        cov.collateral -= amountToWithdraw;
+        if (a1 < a2) cov.ondelta -= amountToWithdraw;
 
+        users[a1].standalone[assetId] += amountToWithdraw;
 
-      cov.collateral -= amountToWithdraw;
-      if (a1 < a2) cov.ondelta -= amountToWithdraw;
-
-      users[a1].standalone[assetId] += amountToWithdraw;
-
-      //emit L(ConvertLib.uint2str(assetId)+"-"+ConvertLib.uint2str(amountToWithdraw));
+        log(ConvertLib.uint2str(assetId),amountToWithdraw);
+      }
     }
+    
   }
-
 
 
 
@@ -147,17 +164,16 @@ contract XLN {
     //determenistic channel key is 40 bytes: concatenated lowerKey + higherKey
     return a1 < a2 ? abi.encodePacked(a1, a2) : abi.encodePacked(a2, a1);
   }
-  /*
-  function getChannel(bytes key) public view returns ( Channel memory ch) {
-    ch = channels[key];
-  }
-  */
 
   function getUser(address a1) external view returns (uint balance) {
     return users[a1].standalone[0];
   }
 
-  //bytes memory key, uint  memory assetId
+
+  
+  function getChannel(address  a1, address  a2) public view returns (uint withdraw_nonce) {
+    withdraw_nonce=channels[channelKey(a1, a2)].withdraw_nonce;
+  }
   
   function getCoverage(address  a1, address  a2, uint assetId) public view returns (Coverage memory cov) {
     cov = channels[channelKey(a1, a2)].coverages[assetId];
@@ -172,69 +188,6 @@ contract XLN {
 
 
 /*
-pragma solidity ^0.4.0;
-pragma experimental ABIEncoderV2;
-
-contract XLN {
-
-  struct Asset{
-    string name;
-
-  }
-
-
-  struct User{
-    uint standalone;
-    
-    mapping (address => Channel) channels;
-  }
-  
-  struct Channel{
-    uint collateral;
-    uint ondelta;
-
-    uint withdrawal_nonce;
-  }
-
-
-  struct Debt{
-    uint amount_left;
-    address pay_to;
-  }
-
-  mapping (address => Bank) public banks;
-
-
-  constructor() {
-    for (uint i = 0; i < 5; i++) {
-      assets.push(Asset({
-        name: "DAI"
-      }))
-
-      users.push(User({
-
-      }))
-
-
-    }
-  }
-}
-  
-
-
-
-
-
-
-
-  
-   
-  function openBank(string uri){
-    Bank storage b = banks[msg.sender];
-    b.uri = uri;
-  }
-  
-
 
    
   function close(bytes pf) {
