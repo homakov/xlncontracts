@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity ^0.8.0;
 pragma experimental ABIEncoderV2;
 
@@ -6,10 +8,66 @@ import "./ECDSA.sol";
 import "./console.sol";
 
 contract XLN is Console{
-  
-  enum ActionChoices { GoLeft, GoRight, GoStraight, SitStill }
+  enum MessageTypeId {
+      None,
+      BalanceProof,
+      BalanceProofUpdate,
+      Withdraw,
+      CooperativeSettle,
+      IOU,
+      MSReward
+  }
+
+  // Deposit structs
+  struct DepositToChannelParams {
+    address a1;
+    address a2;
+    AssetAmountPair[] pairs;
+  }
+
+  struct AssetAmountPair {
+    uint asset_id;
+    uint amount;
+  }
+
+  // Withdraw structs
+  struct WithdrawFromChannelParams {
+    // a1 is implied to be msg.sender
+    // You can't withdraw from channel you don't participate in
+
+    address a2;
+    uint withdraw_nonce;
+    AssetAmountPair[] pairs;
+
+    // unlike deposits, withdrawals require an approval by counterparty
+    bytes sig; 
+  }
+
+  // Dispute structs
+  struct Lock {
+    uint amount;
+    uint until_block;
+    bytes32 hash;
+  }
+  // (uint, int)
+  struct Offdelta {
+    uint asset_id;
+    int offdelta;
+    //Lock[] left_locks;
+    //Lock[] right_locks;
+  }
+
+  struct StartDisputeParams {
+    address a2;
+    uint dispute_nonce;
+
+    Offdelta[] offdeltas;
+
+    bytes sig; 
+  }
 
 
+  // Internal structs
   struct Asset{
     string name;
   }
@@ -22,25 +80,27 @@ contract XLN is Console{
   
   struct User{
     mapping (uint => uint) standalone;
-    Debt[] debts;
+    mapping (uint => Debt[]) debts;
     string uri;
 
   }
   //coverage_balance
   struct Coverage {
     uint collateral;
-    uint ondelta;
+    int ondelta;
   }
-  
+
   struct Channel{
     uint withdraw_nonce;
+
     uint dispute_nonce;
+    uint dispute_until_block;
+    bytes32 hash_outcome_proposed;
+    bool dispute_by_left;
 
     mapping (uint => Coverage) coverages;    
   }
 
-  address ad1 = 0x627306090abaB3A6e1400e9345bC60c78a8BEf57;
-  address ad2 = 0xf17f52151EbEF6C7334FAD080c5704D77216b732;
 
   mapping (bytes => Channel) public channels;
   
@@ -48,79 +108,63 @@ contract XLN is Console{
 
   Asset[] public assets;
   
-  //event L(string);
-  event L(bytes);
-  //event L(bytes, bytes);
-  //event L(string, string);
 
-
-  constructor() public {
-      
-    //emit L("go");
-    
+  constructor() {
     users[msg.sender].standalone[0] = 1000000000000;
 
-
-    //channels[channelKey(ad1, ad2)].coverages[0].collateral = 10000;
-
-
-    for (uint i = 0; i < 2; i++) {
-      /*
-      assets.push(Asset({
-        name: "DAI"
-      }));
-      */
-      
-
-
-    }
-  }
-  
-  
-  function append(string memory a, string memory b, string memory c, string memory d, string  memory e) internal pure returns (string memory) {
-
-    return string(abi.encodePacked(a, b, c, d, e));
-
-} 
-  function depositToChannel(address a1, address a2, uint assetId, uint amount) public returns (Coverage memory cov) {
-    require(users[msg.sender].standalone[0] >= amount);
-    users[msg.sender].standalone[0] -= amount;
-    
-    Coverage storage cov = channels[channelKey(a1, a2)].coverages[assetId];
-    
-
-    
-    cov.collateral += amount;
-    if (a1 < a2) {
-      cov.ondelta += amount;
-    }
-    //emit L('hi','f');
-    //emit L("deposit");
-
-
-    return cov;
- 
+    assets.push(Asset({
+      name: "WETH"
+    }));
   }
 
-  
-  
-  function nest(uint[][] memory nested) public {
 
-    emit L(abi.encode(nested));
-      //emit L(string(abi.encodePacked(nested)));
+  function depositToChannel(DepositToChannelParams memory params) public returns (bool) {
+    bool a1_is_left = params.a1 < params.a2;
 
+    logChannel(params.a1, params.a2);
+
+    for (uint i = 0; i < params.pairs.length; i++) {
+      uint asset_id = params.pairs[i].asset_id;
+      uint amount = params.pairs[i].amount;
+
+      if (users[msg.sender].standalone[asset_id] >= amount) {
+
+        Coverage storage cov = channels[channelKey(params.a1, params.a2)].coverages[asset_id];
+
+        users[msg.sender].standalone[asset_id] -= amount;
+        
+        cov.collateral += amount;
+
+        if (a1_is_left) {
+          cov.ondelta += int(amount);
+          log('new ondelta', cov.ondelta);
+        }
+
+        log("Deposited to channel ", amount);
+      } else {
+        log("not enough funds", msg.sender);
+        return false;
+      }
+    }
+
+    logChannel(params.a1, params.a2);
+
+    return true;
   }
 
   // we need to provide counterparty address to compile encoded message
   //even though we get signer address returned by ecrecover
 
-  function withdrawFromChannel(address a2, uint[] memory nested, bytes memory sig) public {
+  function withdrawFromChannel(WithdrawFromChannelParams memory params) public  returns (bool) {
     address a1 = msg.sender;
+    bool a1_is_left = a1 < params.a2;
 
-    bytes memory chKey = channelKey(a1, a2);
+    logChannel(a1, params.a2);
+
+    bytes memory ch_key = channelKey(a1, params.a2);
 
 
-    bytes memory encoded_msg = abi.encode(chKey, channels[chKey].withdraw_nonce++, nested);
+    bytes memory encoded_msg = abi.encode(ch_key, channels[ch_key].withdraw_nonce++, params.pairs);
 
 
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
@@ -132,33 +176,184 @@ contract XLN is Console{
 
     // ensure actual signer is provided counterparty address
 
-    address signer = ECDSA.recover(hash, sig);
+    address signer = ECDSA.recover(hash, params.sig);
     log('signer', signer);
 
-    require(a2 == signer, "Invalid signer");
+    if(params.a2 != signer) {
+      log("Invalid signer", signer);
+      return false;
+    }
 
 
-    for (uint i = 0; i < nested.length; i+=2) {
-      uint assetId = nested[i];
-      uint amountToWithdraw = nested[i+1];
+    for (uint i = 0; i < params.pairs.length; i++) {
+      uint asset_id = params.pairs[i].asset_id;
+      uint amount = params.pairs[i].amount;
 
-      Coverage storage cov = channels[channelKey(a1, a2)].coverages[assetId];
+      Coverage storage cov = channels[ch_key].coverages[asset_id];
 
-      if (cov.collateral >= amountToWithdraw) {
-        cov.collateral -= amountToWithdraw;
-        if (a1 < a2) cov.ondelta -= amountToWithdraw;
+      if (cov.collateral >= amount) {
+        cov.collateral -= amount;
+        if (a1_is_left) {
+          cov.ondelta -= int(amount);
+        }
 
-        users[a1].standalone[assetId] += amountToWithdraw;
+        users[a1].standalone[asset_id] += amount;
 
-        log(ConvertLib.uint2str(assetId),amountToWithdraw);
+        log(ConvertLib.uint2str(asset_id), amount);
       }
     }
+
+    logChannel(a1, params.a2);
+
+    return true;
     
   }
 
 
 
-  // views
+  function startDispute(StartDisputeParams memory params) public returns (bool) {
+    address a1 = msg.sender;
+
+    bytes memory ch_key = channelKey(a1, params.a2);
+
+    bytes memory encoded_msg = abi.encode(ch_key, params.dispute_nonce, params.offdeltas);
+
+
+    bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
+
+    log('encoded msg',encoded_msg);
+    /*
+    log('encoded msg hash',keccak256(encoded_msg));
+    log('eth hash',hash);*/
+
+    // ensure actual signer is provided counterparty address
+
+    address signer = ECDSA.recover(hash, params.sig); 
+    log('signer', signer);
+
+    address l_user = a1 < params.a2 ? a1 : params.a2;
+    address r_user = a1 < params.a2 ? params.a2 : a1;  
+
+    logChannel(a1, params.a2);
+
+    // iterate over offdeltas and split the assets
+    for (uint i = 0;i<params.offdeltas.length;i++){
+      uint asset_id = params.offdeltas[i].asset_id;
+      Coverage storage cov = channels[ch_key].coverages[asset_id];
+
+      // final delta = offdelta + ondelta + unlocked hashlocks
+      int delta = params.offdeltas[i].offdelta + cov.ondelta;
+
+      log("delta", delta);
+      log("offdelta", params.offdeltas[i].offdelta);
+      
+      if (delta >= 0 && delta <= int(cov.collateral)) {
+        // Collateral is split (standard no-credit LN resolution)
+        uint left_gets = uint(delta);
+        users[l_user].standalone[asset_id] += left_gets;
+        users[r_user].standalone[asset_id] += cov.collateral - left_gets;
+
+
+      } else {
+        // one user gets entire collateral, another gets debt (resolution enabled by XLN)
+        address getsCollateral = delta < 0 ? r_user : l_user;
+        address getsDebt = delta < 0 ? l_user : r_user;
+        uint debtAmount = delta < 0 ? uint(-delta) : uint(delta) - cov.collateral;
+
+        log('gets collateral', getsCollateral);
+        log('gets debt', getsDebt);
+        log('debt', debtAmount);
+
+        users[getsCollateral].standalone[asset_id] += cov.collateral;
+        if (users[getsDebt].standalone[asset_id] >= debtAmount) {
+          // will pay right away without creating Debt
+          users[getsCollateral].standalone[asset_id] += debtAmount;
+          users[getsDebt].standalone[asset_id] -= debtAmount;
+        } else {
+          // pay what they can, and create Debt
+          if (users[getsDebt].standalone[asset_id] > 0) {
+            users[getsCollateral].standalone[asset_id] += users[getsDebt].standalone[asset_id];
+            debtAmount -= users[getsDebt].standalone[asset_id];
+            users[getsDebt].standalone[asset_id] = 0;
+          }
+          users[getsDebt].debts[asset_id].push(Debt({
+            pay_to: getsCollateral,
+            amount_left: debtAmount
+          }));
+        }
+      }
+
+      delete channels[ch_key].coverages[asset_id];
+    }
+    delete channels[ch_key];
+   
+    logChannel(a1, params.a2);
+
+
+    return true;
+
+  }
+
+
+
+
+
+  // this is expected to be the most called function 
+  // hubs use it to rebalance from big senders to big receivers
+  function batchRebalance(
+    WithdrawFromChannelParams[] memory withdrawArray, 
+    DepositToChannelParams[] memory depositArray,
+    StartDisputeParams[] memory disputeArray
+  ) public returns (bool) {
+
+    bool completeSuccess = true; 
+
+
+    // withdrawals are processed first to pull funds from channels to standalone
+    for (uint i = 0; i < withdrawArray.length; i++) {
+      if(!(withdrawFromChannel(withdrawArray[i]))){
+        completeSuccess = false;
+      }
+    }
+
+    for (uint i = 0; i < depositArray.length; i++) {
+      if(!(depositToChannel(depositArray[i]))){
+        completeSuccess = false;
+      }
+    }
+
+    for (uint i = 0; i < disputeArray.length; i++) {
+      if(!(startDispute(disputeArray[i]))){
+        completeSuccess = false;
+      }
+    }
+
+
+    return completeSuccess;
+  }
+
+
+
+  // read only
+
+  function logChannel(address a1, address a2) public {
+    bytes memory ch_key = channelKey(a1, a2);
+    log(">>>Logging channel", ch_key);
+
+    log("withdraw_nonce", channels[ch_key].withdraw_nonce);
+    log("dispute_nonce", channels[ch_key].dispute_nonce);
+    for (uint i = 0; i < assets.length; i++) {
+      log("Asset", i);
+      log("L balance", users[a1].standalone[i]);
+      log("R balance", users[a2].standalone[i]);
+
+      log("collateral", channels[ch_key].coverages[i].collateral);
+      log("ondelta", channels[ch_key].coverages[i].ondelta);
+
+    }
+
+
+  }
   
   function channelKey(address a1, address a2) public pure returns (bytes memory) {
     //determenistic channel key is 40 bytes: concatenated lowerKey + higherKey
@@ -169,319 +364,11 @@ contract XLN is Console{
     return users[a1].standalone[0];
   }
 
-
-  
   function getChannel(address  a1, address  a2) public view returns (uint withdraw_nonce) {
     withdraw_nonce=channels[channelKey(a1, a2)].withdraw_nonce;
   }
   
-  function getCoverage(address  a1, address  a2, uint assetId) public view returns (Coverage memory cov) {
-    cov = channels[channelKey(a1, a2)].coverages[assetId];
-  }
-  
-  
+  function getCoverage(address  a1, address  a2, uint asset_id) public view returns (Coverage memory cov) {
+    cov = channels[channelKey(a1, a2)].coverages[asset_id];
+  }  
 }
-  
-
-
-
-
-
-/*
-
-   
-  function close(bytes pf) {
-    Peer p = peers[msg.sender];
-    
-    // make sure peer is not locked yet
-    require(p.until == 0);
-    
-    // anything in collateral anyway?  
-    require(p.capacity > 0);
-
-    if(pf.length > 0){
-      var (signer, is_bond, delay, nonce, amount) = verify(pf, 0);
-      amount -= p.taken_amount;
-
-      // delayed type
-      require(delay == 2);
-      
-      
-      require(p.capacity >= amount);
-    }else{
-       amount = 0; // hub's part of collateral
-       delay = 2;
-       nonce = 0;
-    }
-    
-    // prevent replay attack
-    require(nonce > p.nonce);
-      
-      p.until = uint32(getBlock() + TIMEOUT);
-      p.nonce = nonce;
-      p.amount = amount;
-      p.locked_by_peer = true;
-      
-      // finally let's notify the hub about close event
-      // so they could dispute it with latest nonce if needed
-      NotifyHubAboutClose(msg.sender, p.amount);
-   }
-    
-    function settle() {
-       Peer p = peers[msg.sender];        
-       
-        // make sure it's locked
-        require(p.until > 0);
-        
-        // if closed by peer, wait timeout
-        if(p.locked_by_peer) require(getBlock() > p.until);
-        
-        uint peerBalance = p.capacity.sub(p.amount);
-        ownerBalance = ownerBalance.add(p.amount);
-        
-        p.amount = 0;
-        p.capacity = 0;
-        p.until = 0;
-        
-        // send back to the peer their part
-        msg.sender.transfer(peerBalance);
-        
-    }
-    
-    // someone posted dispute_proof
-    function dispute(bytes pf) {
-      Peer p = peers[msg.sender];
-
-      // is locked
-      require(p.until > 0);
-
-      // peer can only dispute if closed by hub
-      require(p.locked_by_peer == false);
-      
-        // make sure proof was signed by hub
-       var (signer, is_bond, delay, nonce, amount) = verify(pf, 0);
-       require(signer == owner);
-       
-       amount -= p.taken_amount;
-       require(amount <= p.capacity);
-
-       // peer can dispute with bigger or same nonce if odd
-    require(nonce > p.nonce || (p.nonce == nonce && odd(p.nonce)) );
-
-    
-    ownerBalance = ownerBalance.add(amount);
-    uint peerBalance = p.capacity.sub(amount);
-    
-    p.capacity = 0;
-    p.amount = 0;
-    p.nonce = nonce;
-    p.until = 0;
-
-    msg.sender.transfer(peerBalance);        
-        
-    }
-    
-    // hub is responsive and approves a transfer
-    function transfer(bytes pf, address _peer, address _hub){
-      Peer p = peers[msg.sender];
-
-      var (signer, is_bond, delay, nonce, amount) = verify(pf, 0);
-      
-      require(signer == owner);
-      require(delay == 0); // mutual and instant
-      require(p.until == 0); // unlocked
-      require(p.capacity >= amount); // is there enough collateral
-      require(p.instant_nonce == nonce); // no replay
-      p.instant_nonce += 1;     
-      
-      p.capacity = p.capacity.sub(amount);
-    }
-
-
-
-
-
-  
-  function rebalance(bytes inputs, address[] outputs, uint[] amounts) onlyOwner {
-     // Solidity doesn't support nested arrays yet, so we send instant proofs in one long string
-     // and manually extract using offsets
-     uint8 total_inputs = uint8(inputs.length / PROOF_LENGTH);
-    
-
-    // Step 1: collect collateral to ownerBalance from the peers who gave mutual close proofs
-    for(uint8 i = 0; i < total_inputs; i++){
-        var (signer, is_bond, delay, nonce, amount) = verify(inputs, i);
-        Peer p = peers[signer];
-        
-        require(delay == 0); // mutual close type
-        
-        //require(p.until == 0); // unlocked
-        require(p.capacity >= amount); // is there enough collateral
-        require(p.instant_nonce == nonce); // no replay
-        p.instant_nonce += 1;
-        
-        // first of all we add all amounts to hub balance
-        ownerBalance = ownerBalance.add(amount);
-        p.capacity = p.capacity.sub(amount);
-        
-        // amounts in old proofs are summed with net which gives current amount
-        // i.e. you have proof with hub's amount = 10, then hub instant closed 5
-        // but you can still post amount=10 proof and get the withdrawn -5 deducted 
-        p.taken_amount = p.taken_amount.add(amount);
-    }
-    
-    // Step 2: settled bonds must be paid first (first-in-first-out)
-    for(i = 0; i < uint8(payBondsFirst.length); i++){
-        Bond b = bonds[payBondsFirst[i]];
-        
-        
-    }
-    
-    // Step 3: send ownerBalance to outputs (increase their collateral)
-    // two arrays outputs and amounts work as a mapping
-    require(outputs.length == amounts.length);
-    
-    for(i = 0; i < outputs.length; i++){
-        p = peers[outputs[i]];
-        
-        require(ownerBalance >= amounts[i]);
-        ownerBalance = ownerBalance.sub(amounts[i]);
-        p.capacity = p.capacity.add(amounts[i]);
-        
-        // adds to how much bonds were covered in total
-        p.given_amount = p.given_amount.add(amounts[i]);
-        
-    }
-    
-    
-
-  }
-  
-  function ownerClose(bytes pf) onlyOwner {
-      var (signer, is_bond, delay, nonce, amount) = verify(pf, 0);
-      
-      Peer storage p = peers[signer];
-      
-      // make sure peer is not locked
-      require(p.until == 0);
-    
-      require(delay == 2);
-      require(p.capacity > 0);
-      require(p.capacity >= amount);
-      
-
-      
-      p.until = uint32(getBlock() + TIMEOUT);
-      p.nonce = nonce;
-      p.amount = amount;
-      p.locked_by_peer = false;
-      
-      // finally let's notify the peer about close event
-      NotifyPeerAboutClose(signer, p.amount);
-  }
-  
-  function ownerSettle(address peer) onlyOwner {
-        Peer storage p = peers[peer];
-        
-        // make sure it's locked
-        require(p.until > 0);
-        
-        // if closed by hub, wait delay
-        if(!p.locked_by_peer) require(getBlock() > p.until);
-
-        ownerBalance += p.amount;
-        uint peerBalance = p.capacity - p.amount;
-        
-        p.amount = 0;
-        p.capacity = 0;
-        p.until = 0;
-        
-        // send back to the peer their part
-        peer.transfer(peerBalance);      
-  }
-
-
-  // owner disputes a close by a peer
-  function ownerDispute(bytes pf) onlyOwner {
-    var (signer, is_bond, delay, nonce, amount) = verify(pf, 0);
-    
-    Peer storage p = peers[signer];
-    
-    // is locked
-    require(p.until > 0);
-    
-    // we can only dispute if close started by peer
-    require(p.locked_by_peer);
-    
-    // owner can dispute with bigger or same nonce if even
-    require(nonce > p.nonce || (p.nonce == nonce && !odd(p.nonce)) );
-    
-    ownerBalance += amount;
-    uint peerBalance = p.capacity - amount;
-    
-    p.capacity = 0;
-    p.amount = 0;
-    p.nonce = nonce;
-    p.until = 0;
-
-    signer.transfer(peerBalance);
-  } 
-  
-
-    
-    
-  // parses proof and recovers the signer. delay means type of proof
-  // 0 means instant (mutual) close, 1 is bond, 2 is delayed close
-  // pf is dynamically sized array that can contain a lot of proofs one by one (nested arrays are not supported) 
-  // offset 0..255 
-
-    function verify(bytes pf, uint8 offset) constant returns (address signer, bool is_bond, uint8 delay, uint24 nonce, uint amount) {
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-
-        // find offset where current proof starts in dynamic bytes array
-        uint bytes_offset = offset * PROOF_LENGTH;
-        uint8 header;
-    
-        //amount will be 32->12 bytes soon
-        assembly {
-            r := mload(add(pf, 32))
-            s := mload(add(pf, 64))
-            amount := mload(add(pf, 96))
-            header := and(mload(add(pf, 97)), 0xff)
-            nonce := and(mload(add(pf, 100)), 0xffffff)
-            v := and(mload(add(pf, 101)), 0xff)
-        }
-        
-        require(v == 27 || v == 28);
-        
-        is_bond = (header & 0x80) == 0x80; // works as sign magnitude. -10 is bond
-        delay = header & 0x7f; // 0 means instant. 
-        
-        
-        // includes current contract this, and recepient to avoid replay attacks
-        bytes32 signed_hash = sha3(msg.sender, amount, header, nonce);
-        
-        // returns who signed this proof (peer or hub)
-        signer = ecrecover(signed_hash, v, r, s);
-    }
-    
-    
-    function odd(uint num) constant returns (bool){
-        return bool(num % 2 != 0);
-    }
-    
-    function getBlock() constant returns (uint){
-        // we should return block.number but in JS VM we immitate with timestamp instread
-        return block.timestamp - 1500000000;
-    }
-    
-    
-
-
-}
-*/
-
-
-

@@ -8,11 +8,49 @@ const privateKeys = ['0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0
 '0x388c684f0ba1ef5017716adb5d21a053ea8e90277d0868337519f97bede61418',
 '0x659cbb0e2411a44db63778987b1e22153c086a95eb6b18bdf89de078917abc63']
 
-contract('MetaCoin', (accounts,b,c,d) => {
- 
+
+const toLogs = (res)=>{
+  console.log("\n\n\n\nGAS: "+res.receipt.gasUsed)
+  res.logs.map(l=>{
+    console.log(l.args['0']+": "+l.args['1'])
+  })
+}
+
+let signWithdrawal = async (pairs, by_id, for_id)=>{
+  let ch_key = await X.channelKey(accounts[by_id],accounts[for_id])
+
+  obj = {
+    a2: accounts[for_id],
+    withdraw_nonce: (await X.getChannel(accounts[by_id],accounts[for_id])).toNumber(),
+    pairs: pairs
+  }
+
+  msg = web3.eth.abi.encodeParameters(['bytes','uint','(uint,uint)[]'], [ch_key, obj.withdraw_nonce, obj.pairs]);
+
+  obj.sig = (web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[by_id])).signature
+
+  return {msg, obj}
+
+}
+
+
+
+assertState = async function(a1_bal, a2_bal, collateral, ondelta){
+  assert.equal(a1_bal, (await X.getUser(accounts[0])).toString())
+  assert.equal(a2_bal, (await X.getUser(accounts[1])).toString())
+
+  let cov = await X.getCoverage(accounts[0], accounts[1], 0);
+  assert.equal(collateral, cov.collateral)
+  assert.equal(ondelta, cov.ondelta)    
+}
+
+
+contract('XLN', (accounts) => {
+  global.accounts = accounts
 
   it('channelKey must be deterministic for any order of addresses', async ()=>{
-    const X = await XLN.deployed()
+    global.X = await XLN.deployed()
+    
     let acs = ['0xda7A0318c1870121F85749c3feBdB7e18aA65740',
     '0x4e5561C72D820B53C5c1c3C372D7254b4Fa3D65E']
 
@@ -24,110 +62,136 @@ contract('MetaCoin', (accounts,b,c,d) => {
     //console.log(await X.channels(key))
   })
 
-  it('should deposit 100 to channel from either side correctly', async ()=>{
-    const X = await XLN.deployed()
 
-    // log channel
-    assert.equal('1000000000000', (await X.getUser(accounts[0])).toString())
-    let cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    assert.equal('0', cov.collateral)
-    assert.equal('0', cov.ondelta)
- 
-    await X.depositToChannel(accounts[0], accounts[1], 0, 100)
+  it('test depositToChannel', async ()=>{
 
-
-    assert.equal('999999999900', (await X.getUser(accounts[0])).toString())
-    cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    assert.equal('100', cov.collateral)
-    assert.equal('100', cov.ondelta)
     
-    await X.depositToChannel(accounts[1], accounts[0], 0, 100)
 
-
-    assert.equal('999999999800', (await X.getUser(accounts[0])).toString())
-    cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    assert.equal('200', cov.collateral)
-    assert.equal('100', cov.ondelta) //ondelta not increased for right user
-  })
-
-
-  it('should withdraw 100 from either side correctly', async ()=>{
-    const X = await XLN.deployed()
-
-    // log channel
-    assert.equal('999999999800', (await X.getUser(accounts[0])).toString())
-    cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    assert.equal('200', cov.collateral)
-    assert.equal('100', cov.ondelta)
-
-    let amounts = [0, 10, 0, 20]
-
-    let chKey = await X.channelKey(accounts[0],accounts[1])
-
-    withdraw_nonce = (await X.getChannel(accounts[0],accounts[1])).toNumber()
-    msg=web3.eth.abi.encodeParameters(['bytes','uint','uint[]'], [chKey,withdraw_nonce, amounts]);
-    console.log('we encoded',msg)
-
-
-    //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: chKey}, {t: 'uint[][]', v: go}))
-
-    sig=web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0]);
+    await assertState('1000000000000','0', '0','0')
  
-    //assert.equal(accounts[0],web3.eth.accounts.recover(msg, sig.signature))
+    await X.depositToChannel({
+      a1: accounts[0], 
+      a2: accounts[1],
+      pairs: [[0, 100]]
+    })
 
-    let logy = (res)=>{console.log(res.logs.map(l=>l.args['0']+": "+l.args['1']))}
+    await assertState('999999999900','0', '100','100')
+ 
 
+    // from other side
+    await X.depositToChannel({
+      a1: accounts[1], 
+      a2: accounts[0],
+      pairs: [
+        [0, 50],
+        [0, 50]
+      ]
+    })
+    //ondelta not increased when deposited from right side
+    await assertState('999999999800','0', '200','100')
 
-cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    console.log(cov)
-
-    logy(await X.withdrawFromChannel(accounts[0], amounts, sig.signature, {from: accounts[1]}))
-cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    console.log(cov)
-
-    withdraw_nonce = (await X.getChannel(accounts[0],accounts[1])).toNumber()
-    msg=web3.eth.abi.encodeParameters(['bytes','uint','uint[]'], [chKey,withdraw_nonce, amounts]);
-    console.log('we encoded',msg)
-    sig=web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0]);
-
-    logy(await X.withdrawFromChannel(accounts[0], amounts, sig.signature, {from: accounts[1]}))
-cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    console.log(cov)
-    console.log(res.logs.map(l=>l.args['0']+l.args['1']))
-
-
-    return
-    assert.equal('999999999900', (await X.getUser(accounts[0])).toString())
-    cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    console.log(cov)
-    assert.equal('100', cov.collateral)
-    assert.equal('0', cov.ondelta)
-
-    //withdraw from counterparty side
-    await X.withdrawFromChannel(accounts[0],  0, 100,{from: accounts[1]})
-
-    assert.equal('100', (await X.getUser(accounts[1])).toString())
-    cov = await X.getCoverage(accounts[0], accounts[1], 0);
-    assert.equal('0', cov.collateral)
-    assert.equal('0', cov.ondelta)
   })
 
 
 
 
+  it('test batchRebalance', async ()=>{
+ 
+
+    let withdrawals = [
+      await signWithdrawal([
+      [0,20],[0,30]
+      ], 1, 0)
+      ]
 
 
 
+    let d = [{
+      a1: accounts[2], 
+      a2: accounts[0],
+      pairs: [
+        [0, 1000]
+      ]
+    },{
+      a1: accounts[3], 
+      a2: accounts[0],
+      pairs: [
+        [0, 1000]
+      ]
+    }]
+
+    console.log(withdrawals)
+
+    toLogs(await X.batchRebalance(
+      withdrawals, 
+      d,
+      []
+    ));
+
+    await assertState('999999997800','0', '200','100')
+
+  })
+
+
+  it('test withdrawFromChannel', async ()=>{
+ 
+    await assertState('999999997800','0', '200','100')
+
+
+    w = await signWithdrawal([
+      [0,20],[0,30]
+      ], 0, 1)
+ 
+
+    //console.log('JS encoded', msg)
+    //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: ch_key}, {t: 'uint[][]', v: go}))
 
 
 
+    toLogs(await X.withdrawFromChannel(w.obj, {from: accounts[1]}))
+    
+    await assertState('999999997800','50', '150','100')
+
+
+    // from other side
+
+
+    w = await signWithdrawal([
+      [0,20],[0,30]
+      ], 1, 0)
+
+    toLogs(await X.withdrawFromChannel(w.obj, {from: accounts[0]}))
+    await assertState('999999997850','50', '100','50')
+
+  })
+
+
+
+  it('accounts[0] starts a dispute correctly', async () => {
+     
+    await assertState('999999997850','50', '100','50')
+
+    let ch_key = await X.channelKey(accounts[0],accounts[1])
+
+    obj = {
+      a2: accounts[0],
+      dispute_nonce: 0,
+      offdeltas: [[0, -10]]
+    }
+
+    msg =web3.eth.abi.encodeParameters(['bytes','uint','(uint,int)[]'], [ch_key, obj.dispute_nonce, obj.offdeltas]);
+
+
+    toLogs(await X.startDispute(obj, {from: accounts[1]}))
+    await assertState('999999997890','110', '0','0')
+  })
+
+
+
+ 
 
   it('should put 10000 MetaCoin in the first account', async () => {
-    const X = await XLN.deployed()
-
-    // log channel
-    console.log('user',(await X.getUser(accounts[0])).toString())
-
+  
     const metaCoinInstance = await MetaCoin.deployed();
     const balance = await metaCoinInstance.getBalance.call(accounts[0]);
 
@@ -141,11 +205,8 @@ cov = await X.getCoverage(accounts[0], accounts[1], 0);
     assert.equal(metaCoinEthBalance, 2 * metaCoinBalance, 'Library function returned unexpected function, linkage may be broken');
   });
   it('should send coin correctly', async () => {
-    const X = await XLN.deployed()
-
-    // log channel
-    console.log('user',(await X.getUser(accounts[0])).toString())
-
+ 
+ 
     const metaCoinInstance = await MetaCoin.deployed();
 
     // Setup 2 accounts.
