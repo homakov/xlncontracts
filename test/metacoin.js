@@ -19,9 +19,12 @@ const toLogs = (res)=>{
 let signWithdrawal = async (pairs, by_id, for_id)=>{
   let ch_key = await X.channelKey(accounts[by_id],accounts[for_id])
 
+  let ch =(await X.getChannel(accounts[by_id],accounts[for_id]))
+
+
   obj = {
-    a2: accounts[for_id],
-    withdraw_nonce: (await X.getChannel(accounts[by_id],accounts[for_id])).toNumber(),
+    a2: accounts[by_id],
+    withdraw_nonce: parseInt(ch.channel.withdraw_nonce),
     pairs: pairs
   }
 
@@ -33,15 +36,18 @@ let signWithdrawal = async (pairs, by_id, for_id)=>{
 
 }
 
+// assert JS state to contract state
+
 
 
 assertState = async function(a1_bal, a2_bal, collateral, ondelta){
-  assert.equal(a1_bal, (await X.getUser(accounts[0])).toString())
-  assert.equal(a2_bal, (await X.getUser(accounts[1])).toString())
+  assert.equal(a1_bal, (await X.getUser(accounts[0])).reserves[0].reserve.toString())
+  assert.equal(a2_bal, (await X.getUser(accounts[1])).reserves[0].reserve.toString())
 
-  let cov = await X.getCoverage(accounts[0], accounts[1], 0);
-  assert.equal(collateral, cov.collateral)
-  assert.equal(ondelta, cov.ondelta)    
+  let ch = await X.getChannel(accounts[0], accounts[1]);
+
+  assert.equal(collateral, ch.collaterals[0].collateral)
+  assert.equal(ondelta, ch.collaterals[0].ondelta)    
 }
 
 
@@ -59,7 +65,7 @@ contract('XLN', (accounts) => {
     assert.equal(expect_key, await X.channelKey(acs[0],acs[1]))
     assert.equal(expect_key, await X.channelKey(acs[1],acs[0])) 
 
-    //console.log(await X.channels(key))
+
   })
 
 
@@ -67,7 +73,7 @@ contract('XLN', (accounts) => {
 
     
 
-    await assertState('1000000000000','0', '0','0')
+    await assertState('100000000','0', '0','0')
  
     await X.depositToChannel({
       a1: accounts[0], 
@@ -75,7 +81,7 @@ contract('XLN', (accounts) => {
       pairs: [[0, 100]]
     })
 
-    await assertState('999999999900','0', '100','100')
+    await assertState('99999900','0', '100','100')
  
 
     // from other side
@@ -88,7 +94,7 @@ contract('XLN', (accounts) => {
       ]
     })
     //ondelta not increased when deposited from right side
-    await assertState('999999999800','0', '200','100')
+    await assertState('99999800','0', '200','100')
 
   })
 
@@ -97,14 +103,11 @@ contract('XLN', (accounts) => {
 
   it('test batchRebalance', async ()=>{
  
+    await assertState('99999800','0', '200','100')
 
-    let withdrawals = [
-      await signWithdrawal([
-      [0,20],[0,30]
-      ], 1, 0)
-      ]
+    let withdrawals = []
 
-
+    //withdrawals.push((await signWithdrawal([[0,20],[0,30]], 1, 0)).obj)
 
     let d = [{
       a1: accounts[2], 
@@ -120,22 +123,20 @@ contract('XLN', (accounts) => {
       ]
     }]
 
-    console.log(withdrawals)
-
     toLogs(await X.batchRebalance(
       withdrawals, 
       d,
       []
     ));
 
-    await assertState('999999997800','0', '200','100')
+    await assertState('99997800','0', '200','100')
 
   })
 
 
   it('test withdrawFromChannel', async ()=>{
  
-    await assertState('999999997800','0', '200','100')
+    await assertState('99997800','0', '200','100')
 
 
     w = await signWithdrawal([
@@ -143,15 +144,14 @@ contract('XLN', (accounts) => {
       ], 0, 1)
  
 
-    //console.log('JS encoded', msg)
+    //console.log('JS encoded', w.msg)
     //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: ch_key}, {t: 'uint[][]', v: go}))
 
 
 
     toLogs(await X.withdrawFromChannel(w.obj, {from: accounts[1]}))
     
-    await assertState('999999997800','50', '150','100')
-
+    await assertState('99997800','50', '150','100')
 
     // from other side
 
@@ -161,7 +161,7 @@ contract('XLN', (accounts) => {
       ], 1, 0)
 
     toLogs(await X.withdrawFromChannel(w.obj, {from: accounts[0]}))
-    await assertState('999999997850','50', '100','50')
+    await assertState('99997850','50', '100','50')
 
   })
 
@@ -169,7 +169,7 @@ contract('XLN', (accounts) => {
 
   it('accounts[0] starts a dispute correctly', async () => {
      
-    await assertState('999999997850','50', '100','50')
+    await assertState('99997850','50', '100','50')
 
     let ch_key = await X.channelKey(accounts[0],accounts[1])
 
@@ -179,11 +179,15 @@ contract('XLN', (accounts) => {
       offdeltas: [[0, -10]]
     }
 
+
+
     msg =web3.eth.abi.encodeParameters(['bytes','uint','(uint,int)[]'], [ch_key, obj.dispute_nonce, obj.offdeltas]);
+    obj.sig = (web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0])).signature
 
 
-    toLogs(await X.startDispute(obj, {from: accounts[1]}))
-    await assertState('999999997890','110', '0','0')
+    console.log('dispute',obj)
+    console.log(await X.startDispute(obj, {from: accounts[1]}))
+    await assertState('99997890','110', '0','0')
   })
 
 

@@ -8,14 +8,11 @@ import "./ECDSA.sol";
 import "./console.sol";
 
 contract XLN is Console{
-  enum MessageTypeId {
-      None,
-      BalanceProof,
-      BalanceProofUpdate,
-      Withdraw,
-      CooperativeSettle,
-      IOU,
-      MSReward
+  enum MessageType {
+    None,
+    DisputeProof,
+    InstantDisputeProof,
+    Withdraw
   }
 
   // Deposit structs
@@ -74,18 +71,12 @@ contract XLN is Console{
 
 
   struct Debt{
-    uint amount_left;
+    uint amount;
     address pay_to;
   }
   
-  struct User{
-    mapping (uint => uint) standalone;
-    mapping (uint => Debt[]) debts;
-    string uri;
-
-  }
-  //coverage_balance
-  struct Coverage {
+  //Collateral_balance
+  struct Collateral {
     uint collateral;
     int ondelta;
   }
@@ -98,46 +89,68 @@ contract XLN is Console{
     bytes32 hash_outcome_proposed;
     bool dispute_by_left;
 
-    mapping (uint => Coverage) coverages;    
   }
 
+  // hub fees_paid
 
+  // mappings are stored outside of structs because solidity functions cannot return 
+  //structs that contain mappings
+
+
+
+
+  // [address user][asset_id]
+  mapping (address => mapping (uint => uint)) reserves;
+  mapping (address => mapping (uint => uint)) debtIndex;
+  mapping (address => mapping (uint => Debt[])) debts;
+
+  // [bytes ch_key][asset_id]
   mapping (bytes => Channel) public channels;
+  mapping (bytes => mapping(uint => Collateral)) collaterals;    
+
+  // [bytes ch_key]
+
   
-  mapping (address => User) users;
 
   Asset[] public assets;
   
 
   constructor() {
-    users[msg.sender].standalone[0] = 1000000000000;
-
     assets.push(Asset({
       name: "WETH"
     }));
+
+    assets.push(Asset({
+      name: "DAI"
+    }));
+ 
+    reserves[msg.sender][0] = 100000000;
+    reserves[msg.sender][1] = 100000000;
+    reserves[msg.sender][2] = 100000000;
   }
 
 
   function depositToChannel(DepositToChannelParams memory params) public returns (bool) {
     bool a1_is_left = params.a1 < params.a2;
 
+    log('enum type', uint(MessageType.Withdraw));
     logChannel(params.a1, params.a2);
 
     for (uint i = 0; i < params.pairs.length; i++) {
       uint asset_id = params.pairs[i].asset_id;
       uint amount = params.pairs[i].amount;
 
-      if (users[msg.sender].standalone[asset_id] >= amount) {
+      if (reserves[msg.sender][asset_id] >= amount) {
 
-        Coverage storage cov = channels[channelKey(params.a1, params.a2)].coverages[asset_id];
+        Collateral storage col = collaterals[channelKey(params.a1, params.a2)][asset_id];
 
-        users[msg.sender].standalone[asset_id] -= amount;
+        reserves[msg.sender][asset_id] -= amount;
         
-        cov.collateral += amount;
+        col.collateral += amount;
 
         if (a1_is_left) {
-          cov.ondelta += int(amount);
-          log('new ondelta', cov.ondelta);
+          col.ondelta += int(amount);
+          log('new ondelta', col.ondelta);
         }
 
         log("Deposited to channel ", amount);
@@ -164,40 +177,40 @@ contract XLN is Console{
     bytes memory ch_key = channelKey(a1, params.a2);
 
 
-    bytes memory encoded_msg = abi.encode(ch_key, channels[ch_key].withdraw_nonce++, params.pairs);
+    bytes memory encoded_msg = abi.encode(ch_key, channels[ch_key].withdraw_nonce, params.pairs);
 
 
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
 
     log('encoded msg',encoded_msg);
-    /*
-    log('encoded msg hash',keccak256(encoded_msg));
-    log('eth hash',hash);*/
-
+    
     // ensure actual signer is provided counterparty address
 
     address signer = ECDSA.recover(hash, params.sig);
     log('signer', signer);
 
     if(params.a2 != signer) {
+      log("proposed signer ", params.a2);
       log("Invalid signer", signer);
       return false;
     }
+
+    channels[ch_key].withdraw_nonce++;
 
 
     for (uint i = 0; i < params.pairs.length; i++) {
       uint asset_id = params.pairs[i].asset_id;
       uint amount = params.pairs[i].amount;
 
-      Coverage storage cov = channels[ch_key].coverages[asset_id];
+      Collateral storage col = collaterals[ch_key][asset_id];
 
-      if (cov.collateral >= amount) {
-        cov.collateral -= amount;
+      if (col.collateral >= amount) {
+        col.collateral -= amount;
         if (a1_is_left) {
-          cov.ondelta -= int(amount);
+          col.ondelta -= int(amount);
         }
 
-        users[a1].standalone[asset_id] += amount;
+        reserves[a1][asset_id] += amount;
 
         log(ConvertLib.uint2str(asset_id), amount);
       }
@@ -239,60 +252,135 @@ contract XLN is Console{
     // iterate over offdeltas and split the assets
     for (uint i = 0;i<params.offdeltas.length;i++){
       uint asset_id = params.offdeltas[i].asset_id;
-      Coverage storage cov = channels[ch_key].coverages[asset_id];
+      Collateral storage col = collaterals[ch_key][asset_id];
 
       // final delta = offdelta + ondelta + unlocked hashlocks
-      int delta = params.offdeltas[i].offdelta + cov.ondelta;
+      int delta = params.offdeltas[i].offdelta + col.ondelta;
 
       log("delta", delta);
       log("offdelta", params.offdeltas[i].offdelta);
       
-      if (delta >= 0 && delta <= int(cov.collateral)) {
+      if (delta >= 0 && delta <= int(col.collateral)) {
         // Collateral is split (standard no-credit LN resolution)
         uint left_gets = uint(delta);
-        users[l_user].standalone[asset_id] += left_gets;
-        users[r_user].standalone[asset_id] += cov.collateral - left_gets;
+        reserves[l_user][asset_id] += left_gets;
+        reserves[r_user][asset_id] += col.collateral - left_gets;
 
 
       } else {
         // one user gets entire collateral, another gets debt (resolution enabled by XLN)
         address getsCollateral = delta < 0 ? r_user : l_user;
         address getsDebt = delta < 0 ? l_user : r_user;
-        uint debtAmount = delta < 0 ? uint(-delta) : uint(delta) - cov.collateral;
+        uint debtAmount = delta < 0 ? uint(-delta) : uint(delta) - col.collateral;
 
         log('gets collateral', getsCollateral);
         log('gets debt', getsDebt);
         log('debt', debtAmount);
 
-        users[getsCollateral].standalone[asset_id] += cov.collateral;
-        if (users[getsDebt].standalone[asset_id] >= debtAmount) {
+        reserves[getsCollateral][asset_id] += col.collateral;
+        if (reserves[getsDebt][asset_id] >= debtAmount) {
           // will pay right away without creating Debt
-          users[getsCollateral].standalone[asset_id] += debtAmount;
-          users[getsDebt].standalone[asset_id] -= debtAmount;
+          reserves[getsCollateral][asset_id] += debtAmount;
+          reserves[getsDebt][asset_id] -= debtAmount;
         } else {
           // pay what they can, and create Debt
-          if (users[getsDebt].standalone[asset_id] > 0) {
-            users[getsCollateral].standalone[asset_id] += users[getsDebt].standalone[asset_id];
-            debtAmount -= users[getsDebt].standalone[asset_id];
-            users[getsDebt].standalone[asset_id] = 0;
+          if (reserves[getsDebt][asset_id] > 0) {
+            reserves[getsCollateral][asset_id] += reserves[getsDebt][asset_id];
+            debtAmount -= reserves[getsDebt][asset_id];
+            reserves[getsDebt][asset_id] = 0;
           }
-          users[getsDebt].debts[asset_id].push(Debt({
+          debts[getsDebt][asset_id].push(Debt({
             pay_to: getsCollateral,
-            amount_left: debtAmount
+            amount: debtAmount
           }));
         }
       }
 
-      delete channels[ch_key].coverages[asset_id];
+      delete collaterals[ch_key][asset_id];
     }
     delete channels[ch_key];
    
     logChannel(a1, params.a2);
 
-
     return true;
 
   }
+
+
+
+
+
+
+
+
+
+
+
+
+  function createDebt(address fromUser, address toUser, uint amount) public {
+    debts[fromUser][0].push(Debt({
+      pay_to: toUser,
+      amount: amount
+    }));
+    
+  }
+  
+  function getDebts(address fromUser) public view returns (Debt[] memory allDebts, uint memoryIndex) {
+    memoryIndex = debtIndex[fromUser][0];
+    allDebts = debts[fromUser][0];
+  }
+
+  function payDebts(address fromUser, uint top_up) public returns (uint totalDebts) {
+    uint debtsLength = debts[fromUser][0].length;
+    if (debtsLength == 0) {
+      return 0;
+    }
+   
+    uint reserve = reserves[fromUser][0] + top_up; 
+    uint memoryIndex = debtIndex[fromUser][0];
+    
+    if (reserve == 0){
+      return debtsLength - memoryIndex;
+    }
+    
+    while (true) {
+      Debt storage debt = debts[fromUser][0][memoryIndex];
+      
+      // can pay in full
+      if (reserve >= debt.amount) {
+        // transferToReserve
+        reserve -= debt.amount;
+        reserves[debt.pay_to][0] += debt.amount;
+
+        delete debts[fromUser][0][memoryIndex];
+
+        // last debt paid? the user is debt free
+        if (memoryIndex+1 == debtsLength) {
+          memoryIndex = 0;
+          // sets back internal .length to 0
+          delete debts[fromUser][0]; 
+          debtsLength = 0;
+          break;
+        }
+        memoryIndex++;
+        
+      } else {
+        reserves[debt.pay_to][0] += reserve;
+        debt.amount -= reserve;
+        reserve = 0;
+        break;
+      }
+    }
+
+    reserves[fromUser][0] = reserve;
+    debtIndex[fromUser][0] = memoryIndex;
+    
+    return debtsLength - memoryIndex;
+  }
+
+
+
+
 
 
 
@@ -344,11 +432,11 @@ contract XLN is Console{
     log("dispute_nonce", channels[ch_key].dispute_nonce);
     for (uint i = 0; i < assets.length; i++) {
       log("Asset", i);
-      log("L balance", users[a1].standalone[i]);
-      log("R balance", users[a2].standalone[i]);
+      log("L balance", reserves[a1][i]);
+      log("R balance", reserves[a2][i]);
 
-      log("collateral", channels[ch_key].coverages[i].collateral);
-      log("ondelta", channels[ch_key].coverages[i].ondelta);
+      log("collateral", collaterals[ch_key][i].collateral);
+      log("ondelta", collaterals[ch_key][i].ondelta);
 
     }
 
@@ -359,16 +447,56 @@ contract XLN is Console{
     //determenistic channel key is 40 bytes: concatenated lowerKey + higherKey
     return a1 < a2 ? abi.encodePacked(a1, a2) : abi.encodePacked(a2, a1);
   }
-
-  function getUser(address a1) external view returns (uint balance) {
-    return users[a1].standalone[0];
-  }
-
-  function getChannel(address  a1, address  a2) public view returns (uint withdraw_nonce) {
-    withdraw_nonce=channels[channelKey(a1, a2)].withdraw_nonce;
+  
+  struct AssetReserveDebts {
+    uint reserve;
+    Debt[] debts;
+    uint debtIndex;
   }
   
-  function getCoverage(address  a1, address  a2, uint asset_id) public view returns (Coverage memory cov) {
-    cov = channels[channelKey(a1, a2)].coverages[asset_id];
-  }  
+  struct User {
+    AssetReserveDebts[] reserves;
+  }
+
+  function getUser(address a1) external view returns (User memory) {
+    User memory u = User({
+      reserves: new AssetReserveDebts[](assets.length)
+    });
+    
+    for (uint i = 0;i<assets.length;i++){
+      u.reserves[i]=(AssetReserveDebts({
+        reserve: reserves[a1][i],
+        debtIndex: debtIndex[a1][i],
+        debts: debts[a1][i]
+      }));
+    }
+    
+    return u;
+  }
+  
+  struct ChannelReturn{
+    Channel channel;
+    Collateral[] collaterals;
+  }
+
+  function getChannel(address  a1, address  a2) public view returns (ChannelReturn memory ch) {
+    bytes memory ch_key = channelKey(a1, a2);
+    ChannelReturn memory ch = ChannelReturn({
+      channel: channels[ch_key],
+      collaterals: new Collateral[](assets.length)
+    });
+    
+
+    for (uint i = 0;i<assets.length;i++){
+      ch.collaterals[i]=collaterals[ch_key][i];
+    }
+    
+    return ch;
+  }
+  
+    
+    
+    
+  
+    
 }
