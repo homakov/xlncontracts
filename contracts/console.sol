@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.1;
+pragma solidity ^0.8.0;
 contract Console {
   event LogUint(string, uint);
   function log(string  memory s , uint  x) public {

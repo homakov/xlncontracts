@@ -1,242 +1,330 @@
 const MetaCoin = artifacts.require("MetaCoin");
 const XLN = artifacts.require("XLN");
 
-const privateKeys = ['0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3',
-'0xae6ae8e5ccbfb04590405997ee2d52d2b330726137b875053c36d94e974d162f',
-'0x0dbbe8e4ae425a6d2687f1a7e3ba17bc98c673636790f1b8ad91193c05875ef1',
-'0xc88b703fb08cbea894b6aeff5a544fb92e78a18e19814cd85da83b71f772aa6c',
-'0x388c684f0ba1ef5017716adb5d21a053ea8e90277d0868337519f97bede61418',
-'0x659cbb0e2411a44db63778987b1e22153c086a95eb6b18bdf89de078917abc63']
+const privateKeys = [
+  "0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3",
+  "0xae6ae8e5ccbfb04590405997ee2d52d2b330726137b875053c36d94e974d162f",
+  "0x0dbbe8e4ae425a6d2687f1a7e3ba17bc98c673636790f1b8ad91193c05875ef1",
+  "0xc88b703fb08cbea894b6aeff5a544fb92e78a18e19814cd85da83b71f772aa6c",
+  "0x388c684f0ba1ef5017716adb5d21a053ea8e90277d0868337519f97bede61418",
+  "0x659cbb0e2411a44db63778987b1e22153c086a95eb6b18bdf89de078917abc63",
+];
 
+const logTx = (res) => {
+  console.log("\n\n\n\nGAS: " + res.receipt.gasUsed);
+  res.logs.map((l) => {
+    console.log(l.args["0"] + ": " + l.args["1"]);
+  });
+};
 
-const toLogs = (res)=>{
-  console.log("\n\n\n\nGAS: "+res.receipt.gasUsed)
-  res.logs.map(l=>{
-    console.log(l.args['0']+": "+l.args['1'])
-  })
-}
+const signProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
+  let ch = await X.getChannel(accounts[by_id], accounts[for_id]);
 
-let signWithdrawal = async (pairs, by_id, for_id)=>{
-  let ch_key = await X.channelKey(accounts[by_id],accounts[for_id])
+  let used_nonce =
+    proofType == XLN.MessageType.DisputeProof
+      ? dispute_nonce
+      : ch.channel.cooperative_nonce;
 
-  let ch =(await X.getChannel(accounts[by_id],accounts[for_id]))
+  let last_type =
+    proofType == XLN.MessageType.DisputeProof
+      ? "bytes32"
+      : proofType == XLN.MessageType.WithdrawProof
+      ? "(uint,uint)[]"
+      : "(uint,int)[]";
 
+  let last_item =
+    proofType == XLN.MessageType.DisputeProof
+      ? web3.utils.keccak256(
+          web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+        )
+      : entries;
 
-  obj = {
-    a2: accounts[by_id],
-    withdraw_nonce: parseInt(ch.channel.withdraw_nonce),
-    pairs: pairs
-  }
+  let msg = web3.eth.abi.encodeParameters(
+    ["uint", "bytes", "uint", "uint", last_type],
+    [
+      proofType,
+      ch.channelKey,
+      ch.channel.channel_counter,
+      used_nonce,
+      last_item,
+    ]
+  );
 
-  msg = web3.eth.abi.encodeParameters(['bytes','uint','(uint,uint)[]'], [ch_key, obj.withdraw_nonce, obj.pairs]);
+  console.log("Signed by " + accounts[by_id]);
+  console.log("Signed: " + msg);
 
-  obj.sig = (web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[by_id])).signature
-
-  return {msg, obj}
-
-}
+  return web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[by_id])
+    .signature;
+};
 
 // assert JS state to contract state
 
-
-
-assertState = async function(a1_bal, a2_bal, collateral, ondelta){
-  assert.equal(a1_bal, (await X.getUser(accounts[0])).reserves[0].reserve.toString())
-  assert.equal(a2_bal, (await X.getUser(accounts[1])).reserves[0].reserve.toString())
+assertState = async function (a1_bal, a2_bal, collateral, ondelta) {
+  assert.equal(
+    a1_bal,
+    (await X.getUser(accounts[0])).assets[0].reserve.toString()
+  );
+  assert.equal(
+    a2_bal,
+    (await X.getUser(accounts[1])).assets[0].reserve.toString()
+  );
 
   let ch = await X.getChannel(accounts[0], accounts[1]);
 
-  assert.equal(collateral, ch.collaterals[0].collateral)
-  assert.equal(ondelta, ch.collaterals[0].ondelta)    
-}
+  assert.equal(collateral, ch.collaterals[0].collateral);
+  assert.equal(ondelta, ch.collaterals[0].ondelta);
+};
 
+contract("XLN", (accounts) => {
+  global.accounts = accounts;
 
-contract('XLN', (accounts) => {
-  global.accounts = accounts
+  it("channelKey must be deterministic for any order of addresses", async () => {
+    global.X = await XLN.deployed();
 
-  it('channelKey must be deterministic for any order of addresses', async ()=>{
-    global.X = await XLN.deployed()
-    
-    let acs = ['0xda7A0318c1870121F85749c3feBdB7e18aA65740',
-    '0x4e5561C72D820B53C5c1c3C372D7254b4Fa3D65E']
+    let acs = [
+      "0xda7A0318c1870121F85749c3feBdB7e18aA65740",
+      "0x4e5561C72D820B53C5c1c3C372D7254b4Fa3D65E",
+    ];
 
-    let expect_key = '0x4e5561c72d820b53c5c1c3c372d7254b4fa3d65eda7a0318c1870121f85749c3febdb7e18aa65740'
+    let expect_key =
+      "0x4e5561c72d820b53c5c1c3c372d7254b4fa3d65eda7a0318c1870121f85749c3febdb7e18aa65740";
 
-    assert.equal(expect_key, await X.channelKey(acs[0],acs[1]))
-    assert.equal(expect_key, await X.channelKey(acs[1],acs[0])) 
+    assert.equal(expect_key, await X.channelKey(acs[0], acs[1]));
+    assert.equal(expect_key, await X.channelKey(acs[1], acs[0]));
+  });
 
+  it("test depositToChannel", async () => {
+    await assertState("100000000", "0", "0", "0");
 
-  })
-
-
-  it('test depositToChannel', async ()=>{
-
-    
-
-    await assertState('100000000','0', '0','0')
- 
     await X.depositToChannel({
-      a1: accounts[0], 
-      a2: accounts[1],
-      pairs: [[0, 100]]
-    })
+      receiver: accounts[0],
+      partner: accounts[1],
+      pairs: [[0, 100]],
+    });
 
-    await assertState('99999900','0', '100','100')
- 
+    await assertState("99999900", "0", "100", "100");
 
     // from other side
     await X.depositToChannel({
-      a1: accounts[1], 
-      a2: accounts[0],
+      receiver: accounts[1],
+      partner: accounts[0],
       pairs: [
         [0, 50],
-        [0, 50]
-      ]
-    })
+        [0, 50],
+      ],
+    });
     //ondelta not increased when deposited from right side
-    await assertState('99999800','0', '200','100')
+    await assertState("99999800", "0", "200", "100");
+  });
 
-  })
+  it("test batchRebalance", async () => {
+    await assertState("99999800", "0", "200", "100");
 
+    let withdrawals = [];
 
+    let d = [
+      {
+        receiver: accounts[2],
+        partner: accounts[0],
+        pairs: [[0, 1000]],
+      },
+      {
+        receiver: accounts[3],
+        partner: accounts[0],
+        pairs: [[0, 1000]],
+      },
+    ];
 
+    logTx(await X.batchRebalance(withdrawals, [], [], d));
 
-  it('test batchRebalance', async ()=>{
- 
-    await assertState('99999800','0', '200','100')
+    await assertState("99997800", "0", "200", "100");
+  });
 
-    let withdrawals = []
+  it("test withdrawFromChannel", async () => {
+    await assertState("99997800", "0", "200", "100");
 
-    //withdrawals.push((await signWithdrawal([[0,20],[0,30]], 1, 0)).obj)
-
-    let d = [{
-      a1: accounts[2], 
-      a2: accounts[0],
-      pairs: [
-        [0, 1000]
-      ]
-    },{
-      a1: accounts[3], 
-      a2: accounts[0],
-      pairs: [
-        [0, 1000]
-      ]
-    }]
-
-    toLogs(await X.batchRebalance(
-      withdrawals, 
-      d,
-      []
-    ));
-
-    await assertState('99997800','0', '200','100')
-
-  })
-
-
-  it('test withdrawFromChannel', async ()=>{
- 
-    await assertState('99997800','0', '200','100')
-
-
-    w = await signWithdrawal([
-      [0,20],[0,30]
-      ], 0, 1)
- 
+    let pairs = [
+      [0, 20],
+      [0, 30],
+    ];
+    let sig = await signProof(0, 1, XLN.MessageType.WithdrawProof, pairs);
 
     //console.log('JS encoded', w.msg)
     //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: ch_key}, {t: 'uint[][]', v: go}))
+    console.log("sig", sig);
+    console.log("partner", accounts[0]);
 
+    logTx(
+      await X.withdrawFromChannel(
+        { partner: accounts[0], pairs: pairs, sig: sig },
+        { from: accounts[1] }
+      )
+    );
 
+    await assertState("99997800", "50", "150", "100");
 
-    toLogs(await X.withdrawFromChannel(w.obj, {from: accounts[1]}))
-    
-    await assertState('99997800','50', '150','100')
+    pairs = [
+      [0, 20],
+      [0, 30],
+    ];
+    sig = await signProof(1, 0, XLN.MessageType.WithdrawProof, pairs);
 
-    // from other side
+    logTx(
+      await X.withdrawFromChannel(
+        { partner: accounts[1], pairs: pairs, sig: sig },
+        { from: accounts[0] }
+      )
+    );
 
-
-    w = await signWithdrawal([
-      [0,20],[0,30]
-      ], 1, 0)
-
-    toLogs(await X.withdrawFromChannel(w.obj, {from: accounts[0]}))
-    await assertState('99997850','50', '100','50')
-
-  })
-
-
-
-  it('accounts[0] starts a dispute correctly', async () => {
-     
-    await assertState('99997850','50', '100','50')
-
-    let ch_key = await X.channelKey(accounts[0],accounts[1])
-
-    obj = {
-      a2: accounts[0],
-      dispute_nonce: 0,
-      offdeltas: [[0, -10]]
-    }
-
-
-
-    msg =web3.eth.abi.encodeParameters(['bytes','uint','(uint,int)[]'], [ch_key, obj.dispute_nonce, obj.offdeltas]);
-    obj.sig = (web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[0])).signature
-
-
-    console.log('dispute',obj)
-    console.log(await X.startDispute(obj, {from: accounts[1]}))
-    await assertState('99997890','110', '0','0')
-  })
-
-
-
- 
-
-  it('should put 10000 MetaCoin in the first account', async () => {
-  
-    const metaCoinInstance = await MetaCoin.deployed();
-    const balance = await metaCoinInstance.getBalance.call(accounts[0]);
-
-    //assert.equal(balance.valueOf(), 10000, "10000 wasn't in the first account");
+    await assertState("99997850", "50", "100", "50");
   });
-  it('should call a function that depends on a linked library', async () => {
-    const metaCoinInstance = await MetaCoin.deployed();
-    const metaCoinBalance = (await metaCoinInstance.getBalance.call(accounts[0])).toNumber();
-    const metaCoinEthBalance = (await metaCoinInstance.getBalanceInEth.call(accounts[0])).toNumber();
 
-    assert.equal(metaCoinEthBalance, 2 * metaCoinBalance, 'Library function returned unexpected function, linkage may be broken');
+  it("submit dispute proof", async () => {
+    await assertState("99997850", "50", "100", "50");
+
+    let ch_key = await X.channelKey(accounts[0], accounts[1]);
+    let entries = [[0, -10]];
+
+    let nonce = 1;
+
+    let sig = await signProof(
+      0,
+      1,
+      XLN.MessageType.DisputeProof,
+      entries,
+      nonce
+    );
+
+    let entries_hash = web3.utils.keccak256(
+      web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+    );
+
+    logTx(
+      await X.submitDisputeProof(
+        {
+          partner: accounts[0],
+          dispute_nonce: nonce,
+          entries_hash: entries_hash,
+          entries: [],
+          sig: sig,
+        },
+        { from: accounts[1] }
+      )
+    );
+
+    logTx(
+      await X.acceptDispute(
+        {
+          partner: accounts[0],
+          entries: entries,
+        },
+        { from: accounts[1] }
+      )
+    );
+    await assertState("99997850", "50", "100", "50");
+
+    entries = [[0, 10]];
+    nonce = 23;
+    sig = await signProof(1, 0, XLN.MessageType.DisputeProof, entries, nonce);
+    entries_hash = web3.utils.keccak256(
+      web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+    );
+
+    logTx(
+      await X.submitDisputeProof(
+        {
+          partner: accounts[1],
+          dispute_nonce: nonce,
+          entries_hash: entries_hash,
+          entries: entries,
+          sig: sig,
+        },
+        { from: accounts[0] }
+      )
+    );
+
+    await assertState("99997910", "90", "0", "0");
   });
-  it('should send coin correctly', async () => {
- 
- 
-    const metaCoinInstance = await MetaCoin.deployed();
 
-    // Setup 2 accounts.
-    const accountOne = accounts[0];
-    const accountTwo = accounts[1];
+  it("submitDispute then accept", async () => {
+    await X.depositToChannel({
+      receiver: accounts[0],
+      partner: accounts[1],
+      pairs: [[0, 100]],
+    });
 
-    // Get initial balances of first and second account.
-    const accountOneStartingBalance = (await metaCoinInstance.getBalance.call(accountOne)).toNumber();
-    const accountTwoStartingBalance = (await metaCoinInstance.getBalance.call(accountTwo)).toNumber();
+    await assertState("99997810", "90", "100", "100");
 
-    // Make transaction from first account to second.
-    const amount = 10;
-    await metaCoinInstance.sendCoin(accountTwo, amount, { from: accountOne });
+    let ch_key = await X.channelKey(accounts[0], accounts[1]);
+    let entries = [[0, -50]];
 
-    // Get balances of first and second account after the transactions.
-    const accountOneEndingBalance = (await metaCoinInstance.getBalance.call(accountOne)).toNumber();
-    const accountTwoEndingBalance = (await metaCoinInstance.getBalance.call(accountTwo)).toNumber();
+    let nonce = 1;
 
+    let sig = await signProof(
+      0,
+      1,
+      XLN.MessageType.DisputeProof,
+      entries,
+      nonce
+    );
 
-    assert.equal(accountOneEndingBalance, accountOneStartingBalance - amount, "Amount wasn't correctly taken from the sender");
-    assert.equal(accountTwoEndingBalance, accountTwoStartingBalance + amount, "Amount wasn't correctly sent to the receiver");
+    let entries_hash = web3.utils.keccak256(
+      web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+    );
+
+    logTx(
+      await X.submitDisputeProof(
+        {
+          partner: accounts[0],
+          dispute_nonce: nonce,
+          entries_hash: entries_hash,
+          entries: [],
+          sig: sig,
+        },
+        { from: accounts[1] }
+      )
+    );
+
+    logTx(
+      await X.acceptDispute(
+        {
+          partner: accounts[1],
+          entries: entries,
+        },
+        { from: accounts[0] }
+      )
+    );
+
+    await assertState("99997860", "140", "0", "0");
+  });
+
+  it("accounts[0] cooperative close", async () => {
+    await X.depositToChannel({
+      receiver: accounts[0],
+      partner: accounts[1],
+      pairs: [[0, 100]],
+    });
+    await assertState("99997760", "140", "100", "100");
+
+    let ch_key = await X.channelKey(accounts[0], accounts[1]);
+    let entries = [[0, 50]];
+
+    let sig = await signProof(0, 1, XLN.MessageType.CooperativeProof, entries);
+
+    logTx(
+      await X.cooperativeClose(
+        {
+          partner: accounts[0],
+          entries: entries,
+          sig: sig,
+        },
+        { from: accounts[1] }
+      )
+    );
+
+    await assertState("99997910", "90", "0", "0");
   });
 });
-
-
-
 
 /*
 ganache-cli -m 'candy maple cake sugar pudding cream honey rich smooth crumble sweet treat'
