@@ -2,15 +2,12 @@
 pragma solidity 0.8.0;
 pragma experimental ABIEncoderV2;
 
-import "./ConvertLib.sol";
 import "./ECDSA.sol";
 import "./console.sol";
-
 
 contract XLN is Console {
 
   enum MessageType {
-    None,
     WithdrawProof,
     CooperativeProof,
     DisputeProof
@@ -73,11 +70,6 @@ contract XLN is Console {
 
 
   // Internal structs
-  struct Asset{
-    string name;
-  }
-
-
   struct Debt{
     uint amount;
     address pay_to;
@@ -90,8 +82,8 @@ contract XLN is Console {
   }
 
   struct Channel{
-     // stored indefinitely, incremented every time a channel is closed (dispute or cooperative) 
-     // to invalidate all previously created proofs
+    // stored indefinitely, incremented every time a channel is closed (dispute or cooperative) 
+    // to invalidate all previously created proofs
     uint channel_counter;
 
     // used for withdrawals and cooperative close
@@ -102,16 +94,13 @@ contract XLN is Console {
 
     bool dispute_by_left;
     uint dispute_until_block;
-    bytes32 entries_hash;
+
+    // hash is stored in case of dispute close
+    // entries are only needed for finalizeChannel, no point to store them
+    bytes32 entries_hash; 
+
 
   }
-
-  // hub fees_paid
-
-  // mappings are stored outside of structs because solidity functions cannot return 
-  //structs that contain mappings
-
-
 
 
   // [address user][asset_id]
@@ -121,29 +110,76 @@ contract XLN is Console {
 
   // [bytes ch_key][asset_id]
   mapping (bytes => Channel) public channels;
-  mapping (bytes => mapping(uint => Collateral)) collaterals;    
- 
+  mapping (bytes => mapping(uint => Collateral)) collaterals; 
   
 
+  struct Asset{
+    string name;
+    address erc20address;
+  }
   Asset[] public assets;
+
+
+  struct Hub{
+    address addr;
+    string uri;
+    uint16[] connections;
+  }
+  Hub[] public hubs;
   
 
   constructor() {
+    
     assets.push(Asset({
-      name: "WETH"
+      name: "WETH",
+      erc20address: msg.sender
     }));
 
     assets.push(Asset({
-      name: "DAI"
+      name: "DAI",
+      erc20address: msg.sender
     }));
- 
-    reserves[msg.sender][0] = 100000000;
-    reserves[msg.sender][1] = 100000000;
-    reserves[msg.sender][2] = 100000000;
+
+    log("now assets ",assets.length);
+
+    uint16[] memory cons;
+
+    //cons[0]=1;
+    //cons[1]=2;
+    //log('lennn', cons.length);
+    
+    registerOrUpdateHub(0, "http://127.0.0.1:8000", cons);
+
+    topUp(msg.sender, 0, 100000000);
+    topUp(msg.sender, 1, 100000000);
+    
+  }
+
+  function registerAsset(Asset memory assetToRegister) public {
+    assets.push(assetToRegister);
+  }
+
+  
+  
+  function registerOrUpdateHub(uint16 hub_id, string memory new_uri, uint16[] memory new_connections) public returns (uint16) {
+
+    if (hub_id == 0) {
+      hubs.push(Hub({
+        addr: msg.sender,
+        uri: new_uri,
+        connections: new_connections
+      }));
+      return uint16(hubs.length) - 1;
+    } else {
+      require(msg.sender == hubs[hub_id].addr, "Not your hub address");
+      hubs[hub_id].uri = new_uri;
+      hubs[hub_id].connections = new_connections;
+      return hub_id;
+    }
   }
 
 
-  function depositToChannel(DepositToChannelParams memory params) public returns (bool) {
+  function depositToChannel(DepositToChannelParams memory params) public returns (bool completeSuccess) {
     bool receiver_is_left = params.receiver < params.partner;
     bytes memory ch_key = channelKey(params.receiver, params.partner);
 
@@ -180,10 +216,9 @@ contract XLN is Console {
   // we need to provide counterparty address to compile encoded message
   //even though we get signer address returned by ecrecover
 
-  function withdrawFromChannel(WithdrawProof memory params) public  returns (bool) {
+  function withdrawFromChannel(WithdrawProof memory params) public returns (bool) {
     bool sender_is_left = msg.sender < params.partner;
 
-    logChannel(msg.sender, params.partner);
 
     bytes memory ch_key = channelKey(msg.sender, params.partner);
 
@@ -219,17 +254,12 @@ contract XLN is Console {
         }
 
         reserves[msg.sender][asset_id] += amount;
-
-        log(ConvertLib.uint2str(asset_id), amount);
       }
     }
 
     logChannel(msg.sender, params.partner);
-
     return true;
-    
   }
-
 
 
   function cooperativeClose(CooperativeProof memory params) public returns (bool) {
@@ -239,10 +269,7 @@ contract XLN is Console {
 
 
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
-
     log('Encoded msg',encoded_msg);
-
-    // ensure actual signer is provided counterparty address
 
     if(params.partner != ECDSA.recover(hash, params.sig)) {
       log("Invalid signer ", params.partner);
@@ -255,8 +282,7 @@ contract XLN is Console {
     address r_user = msg.sender < params.partner ? params.partner : msg.sender;  
 
     finalizeChannel(ch_key, l_user, r_user, params.entries);
-
-
+    return true;
   }
 
 
@@ -271,15 +297,11 @@ contract XLN is Console {
       // final delta = offdelta + ondelta + unlocked hashlocks
       int delta = entries[i].offdelta + col.ondelta;
 
-      log("delta", delta);
-      log("offdelta", entries[i].offdelta);
-      
-      if (delta >= 0 && delta <= int(col.collateral)) {
+      if (delta >= 0 && uint(delta) <= col.collateral) {
         // Collateral is split (standard no-credit LN resolution)
         uint left_gets = uint(delta);
         reserves[l_user][asset_id] += left_gets;
         reserves[r_user][asset_id] += col.collateral - left_gets;
-
 
       } else {
         // one user gets entire collateral, another gets debt (resolution enabled by XLN)
@@ -287,7 +309,7 @@ contract XLN is Console {
         address getsDebt = delta < 0 ? l_user : r_user;
         uint debtAmount = delta < 0 ? uint(-delta) : uint(delta) - col.collateral;
 
-        log('gets collateral', getsCollateral);
+        
         log('gets debt', getsDebt);
         log('debt', debtAmount);
 
@@ -336,33 +358,23 @@ contract XLN is Console {
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
 
     log('encoded msg',encoded_msg);
-    /*
-    log('encoded msg hash',keccak256(encoded_msg));
-    log('eth hash',hash);*/
-
     // ensure actual signer is provided counterparty address
 
     require(ECDSA.recover(hash, params.sig) == params.partner, "Invalid signer");
 
     if (channels[ch_key].dispute_until_block == 0) {
-
-
       channels[ch_key].dispute_by_left = msg.sender < params.partner;
       channels[ch_key].dispute_nonce = params.dispute_nonce;
       channels[ch_key].entries_hash = params.entries_hash;
       channels[ch_key].dispute_until_block = block.number + 20;
 
-      log("set until",channels[ch_key].dispute_until_block);
-
-
+      log("set until", channels[ch_key].dispute_until_block);
     } else {
       require(!channels[ch_key].dispute_by_left == msg.sender < params.partner, "Only your partner can counter dispute");
 
       require(channels[ch_key].dispute_nonce < params.dispute_nonce, "New nonce must be greater");
 
       require(params.entries_hash == keccak256(abi.encode(params.entries)), "Wrong entries provided");
-
-      //require(block.number < channels[ch_key].dispute_until_block);
 
 
       address l_user = msg.sender < params.partner ? msg.sender : params.partner;
@@ -380,24 +392,23 @@ contract XLN is Console {
   }
 
 
-  function acceptDispute(AcceptDisputeParams memory params) public returns (bool) {
+  function acceptDispute(AcceptDisputeParams memory params) public returns (bool success) {
     bytes memory ch_key = channelKey(msg.sender, params.partner);
 
     bool sender_is_left = msg.sender < params.partner;
  
     if ((channels[ch_key].dispute_by_left == sender_is_left) && block.number < channels[ch_key].dispute_until_block) {
       return false;
-    } else if (channels[ch_key].entries_hash == keccak256(abi.encode(params.entries))) {
-
-      address l_user = msg.sender < params.partner ? msg.sender : params.partner;
-      address r_user = msg.sender < params.partner ? params.partner : msg.sender;  
-
-
-      finalizeChannel(ch_key, l_user, r_user, params.entries);
-      return true;
+    } else if (channels[ch_key].entries_hash != keccak256(abi.encode(params.entries))) {
+      return false;
     }
-    
- 
+
+    address l_user = msg.sender < params.partner ? msg.sender : params.partner;
+    address r_user = msg.sender < params.partner ? params.partner : msg.sender;  
+
+
+    finalizeChannel(ch_key, l_user, r_user, params.entries);
+    return true;
   }
 
 
@@ -407,65 +418,59 @@ contract XLN is Console {
 
 
 
-
-
-  function createDebt(address fromUser, address toUser, uint amount) public {
-    debts[fromUser][0].push(Debt({
-      pay_to: toUser,
-      amount: amount
-    }));
-    
-  }
   
-  function getDebts(address fromUser) public view returns (Debt[] memory allDebts, uint memoryIndex) {
-    memoryIndex = debtIndex[fromUser][0];
-    allDebts = debts[fromUser][0];
+  function getDebts(address addr, uint asset_id) public view returns (Debt[] memory allDebts, uint currentDebtIndex) {
+    currentDebtIndex = debtIndex[addr][asset_id];
+    allDebts = debts[addr][asset_id];
   }
 
-  function payDebts(address fromUser, uint top_up) public returns (uint totalDebts) {
-    uint debtsLength = debts[fromUser][0].length;
+
+  // triggered automatically before every operation with reserve
+  // or can be called manually on 
+  function enforceDebts(address addr, uint asset_id) public returns (uint totalDebts) {
+    uint debtsLength = debts[addr][asset_id].length;
     if (debtsLength == 0) {
       return 0;
     }
    
-    uint reserve = reserves[fromUser][0] + top_up; 
-    uint memoryIndex = debtIndex[fromUser][0];
+    uint memoryReserve = reserves[addr][asset_id]; 
+    uint memoryIndex = debtIndex[addr][asset_id];
     
-    if (reserve == 0){
+    if (memoryReserve == 0){
       return debtsLength - memoryIndex;
     }
     
     while (true) {
-      Debt storage debt = debts[fromUser][0][memoryIndex];
+      Debt storage debt = debts[addr][asset_id][memoryIndex];
       
       // can pay in full
-      if (reserve >= debt.amount) {
+      if (memoryReserve >= debt.amount) {
         // transferToReserve
-        reserve -= debt.amount;
-        reserves[debt.pay_to][0] += debt.amount;
+        memoryReserve -= debt.amount;
+        reserves[debt.pay_to][asset_id] += debt.amount;
 
-        delete debts[fromUser][0][memoryIndex];
+        delete debts[addr][asset_id][memoryIndex];
 
         // last debt paid? the user is debt free
         if (memoryIndex+1 == debtsLength) {
           memoryIndex = 0;
           // sets back internal .length to 0
-          delete debts[fromUser][0]; 
+          delete debts[addr][asset_id]; 
           debtsLength = 0;
           break;
         }
         memoryIndex++;
         
       } else {
-        reserves[debt.pay_to][0] += reserve;
-        debt.amount -= reserve;
-        reserve = 0;
+        reserves[debt.pay_to][asset_id] += memoryReserve;
+        debt.amount -= memoryReserve;
+        memoryReserve = 0;
         break;
       }
     }
 
-    reserves[fromUser][0] = reserve;
-    debtIndex[fromUser][0] = memoryIndex;
+    reserves[addr][asset_id] = memoryReserve;
+    debtIndex[addr][asset_id] = memoryIndex;
     
     return debtsLength - memoryIndex;
   }
@@ -474,51 +479,48 @@ contract XLN is Console {
 
 
 
+  struct Batch {
+    WithdrawProof[] withdrawProofs;
+    CooperativeProof[] cooperativeProofs;
+    DisputeProof[] disputeProofs;
+    AcceptDisputeParams[] acceptDisputes;
+    DepositToChannelParams[] depositArray;
+  }
 
 
 
-
-  // this is expected to be the most called function 
-  // hubs use it to rebalance from big senders to big receivers
-  function batchRebalance(
-    WithdrawProof[] memory withdrawProofs, 
-    CooperativeProof[] memory cooperativeProofs,
-    DisputeProof[] memory disputeProofs,
-    AcceptDisputeParams[] memory acceptDisputes,
-    DepositToChannelParams[] memory depositArray
-  ) public returns (bool) {
-
-    bool completeSuccess = true; 
-
+  // hubs use onchain contract heavily to rebalance collateral
+  function batch(Batch calldata b) public returns (bool completeSuccess) {
+    completeSuccess = true; 
 
     // withdrawals are processed first to pull funds from channels to standalone
-    for (uint i = 0; i < withdrawProofs.length; i++) {
-      if(!(withdrawFromChannel(withdrawProofs[i]))){
+    for (uint i = 0; i < b.withdrawProofs.length; i++) {
+      if(!(withdrawFromChannel(b.withdrawProofs[i]))){
         completeSuccess = false;
       }
     }
 
-    for (uint i = 0; i < cooperativeProofs.length; i++) {
-      if(!(cooperativeClose(cooperativeProofs[i]))){
+    for (uint i = 0; i < b.cooperativeProofs.length; i++) {
+      if(!(cooperativeClose(b.cooperativeProofs[i]))){
         completeSuccess = false;
       }
     }
 
-    for (uint i = 0; i < disputeProofs.length; i++) {
-      if(!(submitDisputeProof(disputeProofs[i]))){
+    for (uint i = 0; i < b.disputeProofs.length; i++) {
+      if(!(submitDisputeProof(b.disputeProofs[i]))){
         completeSuccess = false;
       }
     }
 
-    for (uint i = 0; i < acceptDisputes.length; i++) {
-      if(!(acceptDispute(acceptDisputes[i]))){
+    for (uint i = 0; i < b.acceptDisputes.length; i++) {
+      if(!(acceptDispute(b.acceptDisputes[i]))){
         completeSuccess = false;
       }
     }
 
 
-    for (uint i = 0; i < depositArray.length; i++) {
-      if(!(depositToChannel(depositArray[i]))){
+    for (uint i = 0; i < b.depositArray.length; i++) {
+      if(!(depositToChannel(b.depositArray[i]))){
         completeSuccess = false;
       }
     }
@@ -531,22 +533,20 @@ contract XLN is Console {
   // read only
 
   function logChannel(address a1, address a2) public {
+    /*
     bytes memory ch_key = channelKey(a1, a2);
-    log(">>>Logging channel", ch_key);
-
+    log(">>> Logging channel", ch_key);
     log("cooperative_nonce", channels[ch_key].cooperative_nonce);
     log("dispute_nonce", channels[ch_key].dispute_nonce);
+    log("dispute_until_block", channels[ch_key].dispute_until_block);
     for (uint i = 0; i < assets.length; i++) {
       log("Asset", i);
-      log("L balance", reserves[a1][i]);
-      log("R balance", reserves[a2][i]);
-
+      log("Left:", reserves[a1][i]);
+      log("Right:", reserves[a2][i]);
       log("collateral", collaterals[ch_key][i].collateral);
       log("ondelta", collaterals[ch_key][i].ondelta);
-
     }
-
-
+    */
   }
   
   function channelKey(address a1, address a2) public pure returns (bytes memory) {
@@ -560,12 +560,12 @@ contract XLN is Console {
     uint debtIndex;
   }
   
-  struct User {
+  struct UserReturn {
     AssetReserveDebts[] assets;
   }
 
-  function getUser(address addr) external view returns (User memory) {
-    User memory u = User({
+  function getUser(address addr) external view returns (UserReturn memory) {
+    UserReturn memory u = UserReturn({
       assets: new AssetReserveDebts[](assets.length)
     });
     
@@ -579,6 +579,7 @@ contract XLN is Console {
     
     return u;
   }
+
   
   struct ChannelReturn{
     bytes channelKey;
@@ -602,7 +603,20 @@ contract XLN is Console {
     return ch;
   }
   
-    
+  // dev-only helpers
+  function topUp(address addr, uint asset_id, uint amount) public {
+    reserves[addr][asset_id] += amount;
+  }
+  /*
+
+  function createDebt(address fromUser, address toUser, uint asset_id, uint amount) public {
+    debts[fromUser][asset_id].push(Debt({
+      pay_to: toUser,
+      amount: amount
+    }));
+  }
+
+  */
     
     
   

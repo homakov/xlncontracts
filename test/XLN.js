@@ -1,4 +1,3 @@
-const MetaCoin = artifacts.require("MetaCoin");
 const XLN = artifacts.require("XLN");
 
 const privateKeys = [
@@ -17,7 +16,7 @@ const logTx = (res) => {
   });
 };
 
-const signProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
+const hashProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
   let ch = await X.getChannel(accounts[by_id], accounts[for_id]);
 
   let used_nonce =
@@ -39,27 +38,31 @@ const signProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
         )
       : entries;
 
-  let msg = web3.eth.abi.encodeParameters(
-    ["uint", "bytes", "uint", "uint", last_type],
-    [
-      proofType,
-      ch.channelKey,
-      ch.channel.channel_counter,
-      used_nonce,
-      last_item,
-    ]
+  return web3.utils.keccak256(
+    web3.eth.abi.encodeParameters(
+      ["uint", "bytes", "uint", "uint", last_type],
+      [
+        proofType,
+        ch.channelKey,
+        ch.channel.channel_counter,
+        used_nonce,
+        last_item,
+      ]
+    )
   );
+};
 
-  console.log("Signed by " + accounts[by_id]);
-  console.log("Signed: " + msg);
-
-  return web3.eth.accounts.sign(web3.utils.keccak256(msg), privateKeys[by_id])
-    .signature;
+const signProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
+  return web3.eth.accounts.sign(
+    await hashProof(by_id, for_id, proofType, entries, dispute_nonce),
+    privateKeys[by_id]
+  ).signature;
 };
 
 // assert JS state to contract state
 
 assertState = async function (a1_bal, a2_bal, collateral, ondelta) {
+  console.log(await X.getUser(accounts[0]));
   assert.equal(
     a1_bal,
     (await X.getUser(accounts[0])).assets[0].reserve.toString()
@@ -117,7 +120,7 @@ contract("XLN", (accounts) => {
     await assertState("99999800", "0", "200", "100");
   });
 
-  it("test batchRebalance", async () => {
+  it("test batch", async () => {
     await assertState("99999800", "0", "200", "100");
 
     let withdrawals = [];
@@ -135,7 +138,7 @@ contract("XLN", (accounts) => {
       },
     ];
 
-    logTx(await X.batchRebalance(withdrawals, [], [], d));
+    logTx(await X.batch(withdrawals, [], [], [], d));
 
     await assertState("99997800", "0", "200", "100");
   });
@@ -148,11 +151,11 @@ contract("XLN", (accounts) => {
       [0, 30],
     ];
     let sig = await signProof(0, 1, XLN.MessageType.WithdrawProof, pairs);
+    let hash = await hashProof(0, 1, XLN.MessageType.WithdrawProof, pairs);
 
-    //console.log('JS encoded', w.msg)
+    console.log("JS encoded", hash);
     //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: ch_key}, {t: 'uint[][]', v: go}))
-    console.log("sig", sig);
-    console.log("partner", accounts[0]);
+    assert.equal(accounts[0], web3.eth.accounts.recover(hash, sig));
 
     logTx(
       await X.withdrawFromChannel(
