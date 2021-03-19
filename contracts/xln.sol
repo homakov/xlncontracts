@@ -71,7 +71,6 @@ contract XLN is Console {
     address pay_to;
   }
   
-  //Collateral_balance
   struct Collateral {
     uint collateral;
     int ondelta;
@@ -88,7 +87,7 @@ contract XLN is Console {
     // used for dispute (non-cooperative) close 
     uint dispute_nonce;
 
-    bool dispute_by_left;
+    bool dispute_started_by_left;
     uint dispute_until_block;
 
     // hash of entries is stored during dispute close
@@ -247,7 +246,7 @@ contract XLN is Console {
 
         log("Deposited to channel ", amount);
       } else {
-        log("not enough funds", msg.sender);
+        log("Not enough funds", msg.sender);
         return false;
       }
     }
@@ -378,7 +377,7 @@ contract XLN is Console {
     delete channels[ch_key].dispute_nonce;
     delete channels[ch_key].cooperative_nonce;
     delete channels[ch_key].dispute_until_block;
-    delete channels[ch_key].dispute_by_left;
+    delete channels[ch_key].dispute_started_by_left;
 
     channels[ch_key].channel_counter++;
    
@@ -403,7 +402,7 @@ contract XLN is Console {
     require(ECDSA.recover(hash, params.sig) == params.partner, "Invalid signer");
 
     if (channels[ch_key].dispute_until_block == 0) {
-      channels[ch_key].dispute_by_left = msg.sender < params.partner;
+      channels[ch_key].dispute_started_by_left = msg.sender < params.partner;
       channels[ch_key].dispute_nonce = params.dispute_nonce;
       channels[ch_key].entries_hash = params.entries_hash;
 
@@ -412,7 +411,7 @@ contract XLN is Console {
 
       log("set until", channels[ch_key].dispute_until_block);
     } else {
-      require(!channels[ch_key].dispute_by_left == msg.sender < params.partner, "Only your partner can counter dispute");
+      require(!channels[ch_key].dispute_started_by_left == msg.sender < params.partner, "Only your partner can counter dispute");
 
       require(channels[ch_key].dispute_nonce < params.dispute_nonce, "New nonce must be greater");
 
@@ -435,7 +434,7 @@ contract XLN is Console {
 
     bool sender_is_left = msg.sender < params.partner;
  
-    if ((channels[ch_key].dispute_by_left == sender_is_left) && block.number < channels[ch_key].dispute_until_block) {
+    if ((channels[ch_key].dispute_started_by_left == sender_is_left) && block.number < channels[ch_key].dispute_until_block) {
       return false;
     } else if (channels[ch_key].entries_hash != keccak256(abi.encode(params.entries))) {
       return false;
@@ -460,7 +459,8 @@ contract XLN is Console {
 
 
   // triggered automatically before every reserveToChannel
-  // or can be called manually on 
+  // can be called manually if the partner is offline
+  // iterates over debts claims, first-in-first-out 
   function enforceDebts(address addr, uint asset_id) public returns (uint totalDebts) {
     uint debtsLength = debts[addr][asset_id].length;
     if (debtsLength == 0) {
@@ -479,7 +479,6 @@ contract XLN is Console {
       
       // can pay in full
       if (memoryReserve >= debt.amount) {
-        // transferToReserve
         memoryReserve -= debt.amount;
         reserves[debt.pay_to][asset_id] += debt.amount;
 
@@ -488,7 +487,7 @@ contract XLN is Console {
         // last debt paid? the user is debt free
         if (memoryIndex+1 == debtsLength) {
           memoryIndex = 0;
-          // sets back internal .length to 0
+          // resets .length to 0
           delete debts[addr][asset_id]; 
           debtsLength = 0;
           break;
@@ -496,6 +495,7 @@ contract XLN is Console {
         memoryIndex++;
         
       } else {
+        // pay part of the debt
         reserves[debt.pay_to][asset_id] += memoryReserve;
         debt.amount -= memoryReserve;
         memoryReserve = 0;
