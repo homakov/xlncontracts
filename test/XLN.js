@@ -1,4 +1,5 @@
 const XLN = artifacts.require("XLN");
+const crypto = require("crypto");
 
 const privateKeys = [
   "0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3",
@@ -16,8 +17,37 @@ const logTx = (res) => {
   });
 };
 
-const hashProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
-  let ch = await X.getChannel(accounts[by_id], accounts[for_id]);
+const getBatch = (obj) => {
+  return Object.assign(
+    {
+      channelToReserve: [],
+      reserveToChannel: [],
+      reserveToReserve: [],
+      reserveToToken: [],
+      tokenToReserve: [],
+      reseverToReserve: [],
+
+      cooperativeProof: [],
+      disputeProof: [],
+      revealEntries: [],
+
+      revealSecret: [],
+      cleanSecret: [],
+
+      hub_id: 0,
+    },
+    obj
+  );
+};
+
+const getProofHash = async (
+  by_id,
+  for_id,
+  proofType,
+  entries,
+  dispute_nonce
+) => {
+  let ch = await L1.getChannel(accounts[by_id], accounts[for_id]);
 
   let used_nonce =
     proofType == XLN.MessageType.DisputeProof
@@ -52,27 +82,23 @@ const hashProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
   );
 };
 
-const signProof = async (by_id, for_id, proofType, entries, dispute_nonce) => {
-  return web3.eth.accounts.sign(
-    await hashProof(by_id, for_id, proofType, entries, dispute_nonce),
-    privateKeys[by_id]
-  ).signature;
+const signProof = (hash, private_key) => {
+  return web3.eth.accounts.sign(hash, private_key).signature;
 };
 
 // assert JS state to contract state
 
 assertState = async function (a1_bal, a2_bal, collateral, ondelta) {
-  console.log(await X.getUser(accounts[0]));
   assert.equal(
     a1_bal,
-    (await X.getUser(accounts[0])).assets[0].reserve.toString()
+    (await L1.getUser(accounts[0])).assets[0].reserve.toString()
   );
   assert.equal(
     a2_bal,
-    (await X.getUser(accounts[1])).assets[0].reserve.toString()
+    (await L1.getUser(accounts[1])).assets[0].reserve.toString()
   );
 
-  let ch = await X.getChannel(accounts[0], accounts[1]);
+  let ch = await L1.getChannel(accounts[0], accounts[1]);
 
   assert.equal(collateral, ch.collaterals[0].collateral);
   assert.equal(ondelta, ch.collaterals[0].ondelta);
@@ -82,7 +108,7 @@ contract("XLN", (accounts) => {
   global.accounts = accounts;
 
   it("channelKey must be deterministic for any order of addresses", async () => {
-    global.X = await XLN.deployed();
+    global.L1 = await XLN.deployed();
 
     let acs = [
       "0xda7A0318c1870121F85749c3feBdB7e18aA65740",
@@ -92,14 +118,14 @@ contract("XLN", (accounts) => {
     let expect_key =
       "0x4e5561c72d820b53c5c1c3c372d7254b4fa3d65eda7a0318c1870121f85749c3febdb7e18aa65740";
 
-    assert.equal(expect_key, await X.channelKey(acs[0], acs[1]));
-    assert.equal(expect_key, await X.channelKey(acs[1], acs[0]));
+    assert.equal(expect_key, await L1.channelKey(acs[0], acs[1]));
+    assert.equal(expect_key, await L1.channelKey(acs[1], acs[0]));
   });
 
-  it("test depositToChannel", async () => {
+  it("test reserveToChannel", async () => {
     await assertState("100000000", "0", "0", "0");
 
-    await X.depositToChannel({
+    await L1.reserveToChannel({
       receiver: accounts[0],
       partner: accounts[1],
       pairs: [[0, 100]],
@@ -108,7 +134,7 @@ contract("XLN", (accounts) => {
     await assertState("99999900", "0", "100", "100");
 
     // from other side
-    await X.depositToChannel({
+    await L1.reserveToChannel({
       receiver: accounts[1],
       partner: accounts[0],
       pairs: [
@@ -123,42 +149,40 @@ contract("XLN", (accounts) => {
   it("test batch", async () => {
     await assertState("99999800", "0", "200", "100");
 
-    let withdrawals = [];
+    let b = getBatch();
 
-    let d = [
-      {
-        receiver: accounts[2],
-        partner: accounts[0],
-        pairs: [[0, 1000]],
-      },
-      {
-        receiver: accounts[3],
-        partner: accounts[0],
-        pairs: [[0, 1000]],
-      },
-    ];
+    b.reserveToChannel.push({
+      receiver: accounts[2],
+      partner: accounts[0],
+      pairs: [[0, 1000]],
+    });
+    b.reserveToChannel.push({
+      receiver: accounts[3],
+      partner: accounts[0],
+      pairs: [[0, 1000]],
+    });
 
-    logTx(await X.batch(withdrawals, [], [], [], d));
+    logTx(await L1.processBatch(b));
 
     await assertState("99997800", "0", "200", "100");
   });
 
-  it("test withdrawFromChannel", async () => {
+  it("test channelToReserve", async () => {
     await assertState("99997800", "0", "200", "100");
 
     let pairs = [
       [0, 20],
       [0, 30],
     ];
-    let sig = await signProof(0, 1, XLN.MessageType.WithdrawProof, pairs);
-    let hash = await hashProof(0, 1, XLN.MessageType.WithdrawProof, pairs);
+    let hash = await getProofHash(0, 1, XLN.MessageType.WithdrawProof, pairs);
+    let sig = signProof(hash, privateKeys[0]);
 
     console.log("JS encoded", hash);
     //console.log('our hash',web3.utils.soliditySha3({t: 'bytes', v: ch_key}, {t: 'uint[][]', v: go}))
     assert.equal(accounts[0], web3.eth.accounts.recover(hash, sig));
 
     logTx(
-      await X.withdrawFromChannel(
+      await L1.channelToReserve(
         { partner: accounts[0], pairs: pairs, sig: sig },
         { from: accounts[1] }
       )
@@ -170,10 +194,11 @@ contract("XLN", (accounts) => {
       [0, 20],
       [0, 30],
     ];
-    sig = await signProof(1, 0, XLN.MessageType.WithdrawProof, pairs);
+    hash = await getProofHash(1, 0, XLN.MessageType.WithdrawProof, pairs);
+    sig = signProof(hash, privateKeys[1]);
 
     logTx(
-      await X.withdrawFromChannel(
+      await L1.channelToReserve(
         { partner: accounts[1], pairs: pairs, sig: sig },
         { from: accounts[0] }
       )
@@ -185,25 +210,26 @@ contract("XLN", (accounts) => {
   it("submit dispute proof", async () => {
     await assertState("99997850", "50", "100", "50");
 
-    let ch_key = await X.channelKey(accounts[0], accounts[1]);
+    let ch_key = await L1.channelKey(accounts[0], accounts[1]);
     let entries = [[0, -10]];
 
     let nonce = 1;
 
-    let sig = await signProof(
+    let hash = await getProofHash(
       0,
       1,
       XLN.MessageType.DisputeProof,
       entries,
       nonce
     );
+    let sig = signProof(hash, privateKeys[0]);
 
     let entries_hash = web3.utils.keccak256(
       web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
     );
 
     logTx(
-      await X.submitDisputeProof(
+      await L1.disputeProof(
         {
           partner: accounts[0],
           dispute_nonce: nonce,
@@ -216,7 +242,7 @@ contract("XLN", (accounts) => {
     );
 
     logTx(
-      await X.acceptDispute(
+      await L1.revealEntries(
         {
           partner: accounts[0],
           entries: entries,
@@ -228,13 +254,20 @@ contract("XLN", (accounts) => {
 
     entries = [[0, 10]];
     nonce = 23;
-    sig = await signProof(1, 0, XLN.MessageType.DisputeProof, entries, nonce);
+    hash = await getProofHash(
+      1,
+      0,
+      XLN.MessageType.DisputeProof,
+      entries,
+      nonce
+    );
+    sig = signProof(hash, privateKeys[1]);
     entries_hash = web3.utils.keccak256(
       web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
     );
 
     logTx(
-      await X.submitDisputeProof(
+      await L1.disputeProof(
         {
           partner: accounts[1],
           dispute_nonce: nonce,
@@ -250,7 +283,7 @@ contract("XLN", (accounts) => {
   });
 
   it("submitDispute then accept", async () => {
-    await X.depositToChannel({
+    await L1.reserveToChannel({
       receiver: accounts[0],
       partner: accounts[1],
       pairs: [[0, 100]],
@@ -258,25 +291,26 @@ contract("XLN", (accounts) => {
 
     await assertState("99997810", "90", "100", "100");
 
-    let ch_key = await X.channelKey(accounts[0], accounts[1]);
+    let ch_key = await L1.channelKey(accounts[0], accounts[1]);
     let entries = [[0, -50]];
 
     let nonce = 1;
 
-    let sig = await signProof(
+    let hash = await getProofHash(
       0,
       1,
       XLN.MessageType.DisputeProof,
       entries,
       nonce
     );
+    let sig = signProof(hash, privateKeys[0]);
 
     let entries_hash = web3.utils.keccak256(
       web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
     );
 
     logTx(
-      await X.submitDisputeProof(
+      await L1.disputeProof(
         {
           partner: accounts[0],
           dispute_nonce: nonce,
@@ -289,7 +323,7 @@ contract("XLN", (accounts) => {
     );
 
     logTx(
-      await X.acceptDispute(
+      await L1.revealEntries(
         {
           partner: accounts[1],
           entries: entries,
@@ -301,21 +335,36 @@ contract("XLN", (accounts) => {
     await assertState("99997860", "140", "0", "0");
   });
 
+  it("revealSecret", async () => {
+    let secret = crypto.randomBytes(32);
+    let hash = web3.utils.keccak256(secret);
+
+    await L1.revealSecret(secret);
+
+    assert.isAbove((await L1.hash_to_block(hash)).toNumber(), 1);
+  });
+
   it("accounts[0] cooperative close", async () => {
-    await X.depositToChannel({
+    await L1.reserveToChannel({
       receiver: accounts[0],
       partner: accounts[1],
       pairs: [[0, 100]],
     });
     await assertState("99997760", "140", "100", "100");
 
-    let ch_key = await X.channelKey(accounts[0], accounts[1]);
+    let ch_key = await L1.channelKey(accounts[0], accounts[1]);
     let entries = [[0, 50]];
 
-    let sig = await signProof(0, 1, XLN.MessageType.CooperativeProof, entries);
+    let hash = await getProofHash(
+      0,
+      1,
+      XLN.MessageType.CooperativeProof,
+      entries
+    );
+    let sig = signProof(hash, privateKeys[0]);
 
     logTx(
-      await X.cooperativeClose(
+      await L1.cooperativeProof(
         {
           partner: accounts[0],
           entries: entries,

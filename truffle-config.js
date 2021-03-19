@@ -1,9 +1,17 @@
 module.exports = {
   compilers: {
     solc: {
+      settings: {
+        optimizer: {
+          enabled: true, // Default: false
+          runs: 200, // Default: 200
+        },
+      },
       version: "0.8.0",
     },
   },
+
+  plugins: ["truffle-contract-size"],
   // Uncommenting the defaults below
   // provides for an easier quick-start with Ganache.
   // You can also follow this format for other networks;

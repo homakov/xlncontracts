@@ -2,5 +2,8 @@
   "name": "hardhat-project",
   "devDependencies": {
     "hardhat": "^2.1.1"
+  },
+  "dependencies": {
+    "truffle-contract-size": "^2.0.1"
   }
 }
