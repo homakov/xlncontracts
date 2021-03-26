@@ -188,7 +188,7 @@ contract XLN is Console {
     uint asset_id;
     uint amount;
   }
-  function tokenToReserve(TokenToReserve memory params) public returns (bool completeSuccess) {
+  function tokenToReserve(TokenToReserve memory params) public {
     // todo: allow to delegate to another address
     require(Token(assets[params.asset_id].addr).transferFrom(msg.sender, address(this), params.amount));
     reserves[msg.sender][params.asset_id] += params.amount;
@@ -199,7 +199,7 @@ contract XLN is Console {
     uint asset_id;
     uint amount;
   }
-  function reserveToToken(ReserveToToken memory params) public returns (bool completeSuccess) {
+  function reserveToToken(ReserveToToken memory params) public {
     enforceDebts(msg.sender, params.asset_id);
 
     require(reserves[msg.sender][params.asset_id] >= params.amount);
@@ -211,7 +211,7 @@ contract XLN is Console {
     uint asset_id;
     uint amount;
   }
-  function reserveToReserve(ReserveToReserve memory params) public returns (bool completeSuccess) {
+  function reserveToReserve(ReserveToReserve memory params) public {
     enforceDebts(msg.sender, params.asset_id);
 
     require(reserves[msg.sender][params.asset_id] >= params.amount);
@@ -244,7 +244,7 @@ contract XLN is Console {
           col.ondelta += int(amount);
         }
 
-        log("Deposited to channel ", amount);
+        log("Deposited to channel ", collaterals[ch_key][asset_id].collateral);
       } else {
         log("Not enough funds", msg.sender);
         return false;
@@ -393,15 +393,14 @@ contract XLN is Console {
 
     bytes memory encoded_msg = abi.encode(MessageType.DisputeProof, ch_key, channels[ch_key].channel_counter, params.dispute_nonce, params.entries_hash);
 
-
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
 
-    log('encoded msg',encoded_msg);
-    // ensure actual signer is provided counterparty address
+    log('encoded_msg',encoded_msg);
 
     require(ECDSA.recover(hash, params.sig) == params.partner, "Invalid signer");
 
     if (channels[ch_key].dispute_until_block == 0) {
+      // starting a dispute
       channels[ch_key].dispute_started_by_left = msg.sender < params.partner;
       channels[ch_key].dispute_nonce = params.dispute_nonce;
       channels[ch_key].entries_hash = params.entries_hash;
@@ -411,19 +410,16 @@ contract XLN is Console {
 
       log("set until", channels[ch_key].dispute_until_block);
     } else {
+      // providing a counter dispute proof with higher nonce
       require(!channels[ch_key].dispute_started_by_left == msg.sender < params.partner, "Only your partner can counter dispute");
 
       require(channels[ch_key].dispute_nonce < params.dispute_nonce, "New nonce must be greater");
 
-      require(params.entries_hash == keccak256(abi.encode(params.entries)), "Wrong entries provided");
-
+      require(params.entries_hash == keccak256(abi.encode(params.entries)), "Invalid entries_hash");
 
       finalizeChannel(msg.sender, params.partner, params.entries);
       return true;
-
     }
-
-
 
     return true;
   }
@@ -471,20 +467,21 @@ contract XLN is Console {
     uint memoryIndex = debtIndex[addr][asset_id];
     
     if (memoryReserve == 0){
+      // the user has nothing, try again later
       return debtsLength - memoryIndex;
     }
     
     while (true) {
       Debt storage debt = debts[addr][asset_id][memoryIndex];
       
-      // can pay in full
       if (memoryReserve >= debt.amount) {
+        // can pay this debt off in full
         memoryReserve -= debt.amount;
         reserves[debt.pay_to][asset_id] += debt.amount;
 
         delete debts[addr][asset_id][memoryIndex];
 
-        // last debt paid? the user is debt free
+        // last debt paid off, the user is debt free now
         if (memoryIndex+1 == debtsLength) {
           memoryIndex = 0;
           // resets .length to 0
@@ -495,7 +492,7 @@ contract XLN is Console {
         memoryIndex++;
         
       } else {
-        // pay part of the debt
+        // pay off part of the debt
         reserves[debt.pay_to][asset_id] += memoryReserve;
         debt.amount -= memoryReserve;
         memoryReserve = 0;
@@ -503,6 +500,7 @@ contract XLN is Console {
       }
     }
 
+    // put memory variables back to storage
     reserves[addr][asset_id] = memoryReserve;
     debtIndex[addr][asset_id] = memoryIndex;
     
@@ -525,7 +523,7 @@ contract XLN is Console {
 
     ReserveToToken[] reserveToToken;
     TokenToReserve[] tokenToReserve;
-    ReserveToReserve[] reseverToReserve;
+    ReserveToReserve[] reserveToReserve;
 
     bytes32[] revealSecret;
     uint hub_id;
@@ -593,50 +591,63 @@ contract XLN is Console {
   
   struct AssetReserveDebts {
     uint reserve;
-    Debt[] debts;
     uint debtIndex;
+    Debt[] debts;
   }
   
   struct UserReturn {
+    uint ETH_balance;
     AssetReserveDebts[] assets;
   }
 
   function getUser(address addr) external view returns (UserReturn memory) {
-    UserReturn memory u = UserReturn({
+    UserReturn memory response = UserReturn({
+      ETH_balance: addr.balance,
       assets: new AssetReserveDebts[](assets.length)
     });
     
     for (uint i = 0;i<assets.length;i++){
-      u.assets[i]=(AssetReserveDebts({
+      response.assets[i]=(AssetReserveDebts({
         reserve: reserves[addr][i],
         debtIndex: debtIndex[addr][i],
         debts: debts[addr][i]
       }));
     }
     
-    return u;
+    return response;
   }
   
   struct ChannelReturn{
-    bytes channelKey;
+    address partner;
     Channel channel;
     Collateral[] collaterals;
   }
+  
+  // sync many channels around single addr
+  function getChannels(address  addr, address[] memory partners) public view returns ( ChannelReturn[] memory response) {
+    bytes memory ch_key;
 
-  function getChannel(address  a1, address  a2) public view returns (ChannelReturn memory ch) {
-    bytes memory ch_key = channelKey(a1, a2);
-    ch = ChannelReturn({
-      channelKey: ch_key,
-      channel: channels[ch_key],
-      collaterals: new Collateral[](assets.length)
-    });
-    
+    // set length of the response array
+    response = new ChannelReturn[](partners.length);
 
-    for (uint i = 0;i<assets.length;i++){
-      ch.collaterals[i]=collaterals[ch_key][i];
+    for (uint i = 0;i<partners.length;i++){
+      ch_key = channelKey(addr, partners[i]);
+
+      response[i]=ChannelReturn({
+        partner: partners[i],
+        channel: channels[ch_key],
+        collaterals: new Collateral[](assets.length)
+      });
+
+      for (uint asset_id = 0;asset_id<assets.length;asset_id++){
+        response[i].collaterals[asset_id]=collaterals[ch_key][asset_id];
+      }
+      
     }
+
+    return response;
+
     
-    return ch;
   }
   
   // dev-only helpers

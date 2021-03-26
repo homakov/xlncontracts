@@ -22,10 +22,11 @@ const getBatch = (obj) => {
     {
       channelToReserve: [],
       reserveToChannel: [],
-      reserveToReserve: [],
+
       reserveToToken: [],
       tokenToReserve: [],
-      reseverToReserve: [],
+
+      reserveToReserve: [],
 
       cooperativeProof: [],
       disputeProof: [],
@@ -47,7 +48,7 @@ const getProofHash = async (
   entries,
   dispute_nonce
 ) => {
-  let ch = await L1.getChannel(accounts[by_id], accounts[for_id]);
+  let ch = (await L1.getChannels(accounts[by_id], [accounts[for_id]]))[0];
 
   let used_nonce =
     proofType == XLN.MessageType.DisputeProof
@@ -68,16 +69,22 @@ const getProofHash = async (
         )
       : entries;
 
+  let ch_key = await L1.channelKey(accounts[by_id], accounts[for_id]);
+
+  let items = [
+    proofType,
+    ch_key,
+    ch.channel.channel_counter,
+    used_nonce,
+    last_item,
+  ];
+
+  console.log("type", last_item, last_type, items);
+
   return web3.utils.keccak256(
     web3.eth.abi.encodeParameters(
       ["uint", "bytes", "uint", "uint", last_type],
-      [
-        proofType,
-        ch.channelKey,
-        ch.channel.channel_counter,
-        used_nonce,
-        last_item,
-      ]
+      items
     )
   );
 };
@@ -98,7 +105,7 @@ assertState = async function (a1_bal, a2_bal, collateral, ondelta) {
     (await L1.getUser(accounts[1])).assets[0].reserve.toString()
   );
 
-  let ch = await L1.getChannel(accounts[0], accounts[1]);
+  let ch = (await L1.getChannels(accounts[0], [accounts[1]]))[0];
 
   assert.equal(collateral, ch.collaterals[0].collateral);
   assert.equal(ondelta, ch.collaterals[0].ondelta);
