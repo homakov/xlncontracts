@@ -11,7 +11,6 @@ module.exports = {
     },
   },
 
-  plugins: ["truffle-contract-size"],
   // Uncommenting the defaults below
   // provides for an easier quick-start with Ganache.
   // You can also follow this format for other networks;
@@ -19,13 +18,15 @@ module.exports = {
   // for more details on how to specify configuration options!
   //
 
-  //networks: {
-  //  development: {
-  //    host: "127.0.0.1",
-  //    port: 7545,
-  //    network_id: "*"
-  //  },
-  //  test: {
+  networks: {
+    development: {
+      host: "127.0.0.1",
+      port: 8545,
+      network_id: "*"
+    },
+  }
+
+    //  test: {
   //    host: "127.0.0.1",
   //    port: 7545,
   //    network_id: "*"

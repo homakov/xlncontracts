@@ -1,3 +1,5 @@
+// ts-check
+
 const XLN = artifacts.require("XLN");
 const crypto = require("crypto");
 
@@ -15,6 +17,14 @@ const logTx = (res) => {
   res.logs.map((l) => {
     console.log(l.args["0"] + ": " + l.args["1"]);
   });
+};
+//web3.utils.isAddress
+const channelKey = (a1, a2) => {
+  let buf_a1 = Buffer.from(a1.slice(2).toLowerCase(), "hex");
+  let buf_a2 = Buffer.from(a2.slice(2).toLowerCase(), "hex");
+  let ordered_pair =
+    Buffer.compare(buf_a1, buf_a2) == 1 ? [buf_a2, buf_a1] : [buf_a1, buf_a2];
+  return "0x" + Buffer.concat(ordered_pair).toString("hex");
 };
 
 const getBatch = (obj) => {
@@ -124,6 +134,9 @@ contract("XLN", (accounts) => {
 
     let expect_key =
       "0x4e5561c72d820b53c5c1c3c372d7254b4fa3d65eda7a0318c1870121f85749c3febdb7e18aa65740";
+
+    assert.equal(expect_key, channelKey(acs[0], acs[1]));
+    assert.equal(expect_key, channelKey(acs[1], acs[0]));
 
     assert.equal(expect_key, await L1.channelKey(acs[0], acs[1]));
     assert.equal(expect_key, await L1.channelKey(acs[1], acs[0]));

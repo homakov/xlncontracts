@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 interface Token {
-
     /// @return supply total amount of tokens
     function totalSupply() external view returns (uint256 supply);
 

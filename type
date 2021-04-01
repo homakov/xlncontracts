@@ -1,0 +1,3 @@
+truffle migrate
+npx typechain --target=truffle-v5 "build/contracts/*.json"
+cp -R types ../f/types
