@@ -12,6 +12,8 @@ const privateKeys = [
   "0x659cbb0e2411a44db63778987b1e22153c086a95eb6b18bdf89de078917abc63",
 ];
 
+const entries_type = "(uint,int,(uint,uint,bytes32)[],(uint,uint,bytes32)[])[]";
+
 const logTx = (res) => {
   console.log("\n\n\n\nGAS: " + res.receipt.gasUsed);
   res.logs.map((l) => {
@@ -70,12 +72,12 @@ const getProofHash = async (
       ? "bytes32"
       : proofType == XLN.MessageType.WithdrawProof
       ? "(uint,uint)[]"
-      : "(uint,int)[]";
+      : entries_type;
 
   let last_item =
     proofType == XLN.MessageType.DisputeProof
       ? web3.utils.keccak256(
-          web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+          web3.eth.abi.encodeParameters([entries_type], [entries])
         )
       : entries;
 
@@ -231,7 +233,7 @@ contract("XLN", (accounts) => {
     await assertState("99997850", "50", "100", "50");
 
     let ch_key = await L1.channelKey(accounts[0], accounts[1]);
-    let entries = [[0, -10]];
+    let entries = [[0, -10, [], []]];
 
     let nonce = 1;
 
@@ -245,7 +247,7 @@ contract("XLN", (accounts) => {
     let sig = signProof(hash, privateKeys[0]);
 
     let entries_hash = web3.utils.keccak256(
-      web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+      web3.eth.abi.encodeParameters([entries_type], [entries])
     );
 
     logTx(
@@ -272,7 +274,7 @@ contract("XLN", (accounts) => {
     );
     await assertState("99997850", "50", "100", "50");
 
-    entries = [[0, 10]];
+    entries = [[0, 10, [], []]];
     nonce = 23;
     hash = await getProofHash(
       1,
@@ -283,7 +285,7 @@ contract("XLN", (accounts) => {
     );
     sig = signProof(hash, privateKeys[1]);
     entries_hash = web3.utils.keccak256(
-      web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+      web3.eth.abi.encodeParameters([entries_type], [entries])
     );
 
     logTx(
@@ -312,7 +314,7 @@ contract("XLN", (accounts) => {
     await assertState("99997810", "90", "100", "100");
 
     let ch_key = await L1.channelKey(accounts[0], accounts[1]);
-    let entries = [[0, -50]];
+    let entries = [[0, -50, [], []]];
 
     let nonce = 1;
 
@@ -326,7 +328,7 @@ contract("XLN", (accounts) => {
     let sig = signProof(hash, privateKeys[0]);
 
     let entries_hash = web3.utils.keccak256(
-      web3.eth.abi.encodeParameters(["(uint,int)[]"], [entries])
+      web3.eth.abi.encodeParameters([entries_type], [entries])
     );
 
     logTx(
@@ -373,7 +375,7 @@ contract("XLN", (accounts) => {
     await assertState("99997760", "140", "100", "100");
 
     let ch_key = await L1.channelKey(accounts[0], accounts[1]);
-    let entries = [[0, 50]];
+    let entries = [[0, 50, [], []]];
 
     let hash = await getProofHash(
       0,

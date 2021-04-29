@@ -1,9 +1,9 @@
 {
   "contractName": "ECDSA",
   "abi": [],
-  "metadata": "{\"compiler\":{\"version\":\"0.8.0+commit.c7dfd78e\"},\"language\":\"Solidity\",\"output\":{\"abi\":[],\"devdoc\":{\"details\":\"Elliptic Curve Digital Signature Algorithm (ECDSA) operations. These functions can be used to verify that a message was signed by the holder of the private keys of a given address.\",\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"/Users/homakov/work/AAAxln/contracts/ECDSA.sol\":\"ECDSA\"},\"evmVersion\":\"istanbul\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[]},\"sources\":{\"/Users/homakov/work/AAAxln/contracts/ECDSA.sol\":{\"keccak256\":\"0xb66134c037ef421b67039841ff640eb75501f6cbd8f56a0d766544c17166ef52\",\"license\":\"MIT\",\"urls\":[\"bzz-raw://2eabd47c4090532442b3e1989a8f4b29b99f40c2b642f767fdd9f17907eb5288\",\"dweb:/ipfs/QmZW11LhnF7uyUyQ7Za6h1n8zYHpwUa2oJX8jP5xxmwGKz\"]}},\"version\":1}",
-  "bytecode": "0x60566037600b82828239805160001a607314602a57634e487b7160e01b600052600060045260246000fd5b30600052607381538281f3fe73000000000000000000000000000000000000000030146080604052600080fdfea2646970667358221220ed7d9f3dd1b90046f21a66a6aa182dc32fbfb48cc4830aec730682da9f87bcd964736f6c63430008000033",
-  "deployedBytecode": "0x73000000000000000000000000000000000000000030146080604052600080fdfea2646970667358221220ed7d9f3dd1b90046f21a66a6aa182dc32fbfb48cc4830aec730682da9f87bcd964736f6c63430008000033",
+  "metadata": "{\"compiler\":{\"version\":\"0.8.0+commit.c7dfd78e\"},\"language\":\"Solidity\",\"output\":{\"abi\":[],\"devdoc\":{\"details\":\"Elliptic Curve Digital Signature Algorithm (ECDSA) operations. These functions can be used to verify that a message was signed by the holder of the private keys of a given address.\",\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"/Users/homakov/work/AAAxln/contracts/ECDSA.sol\":\"ECDSA\"},\"evmVersion\":\"istanbul\",\"libraries\":{},\"metadata\":{\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":400},\"remappings\":[]},\"sources\":{\"/Users/homakov/work/AAAxln/contracts/ECDSA.sol\":{\"keccak256\":\"0xb66134c037ef421b67039841ff640eb75501f6cbd8f56a0d766544c17166ef52\",\"license\":\"MIT\",\"urls\":[\"bzz-raw://2eabd47c4090532442b3e1989a8f4b29b99f40c2b642f767fdd9f17907eb5288\",\"dweb:/ipfs/QmZW11LhnF7uyUyQ7Za6h1n8zYHpwUa2oJX8jP5xxmwGKz\"]}},\"version\":1}",
+  "bytecode": "0x60566037600b82828239805160001a607314602a57634e487b7160e01b600052600060045260246000fd5b30600052607381538281f3fe73000000000000000000000000000000000000000030146080604052600080fdfea26469706673582212200b4a4b65d82a89c7a7e4309b3ca1daafe8fe6da59cc32996f671c661448eb15564736f6c63430008000033",
+  "deployedBytecode": "0x73000000000000000000000000000000000000000030146080604052600080fdfea26469706673582212200b4a4b65d82a89c7a7e4309b3ca1daafe8fe6da59cc32996f671c661448eb15564736f6c63430008000033",
   "immutableReferences": {},
   "generatedSources": [],
   "deployedGeneratedSources": [],
@@ -4015,7 +4015,7 @@
   },
   "networks": {},
   "schemaVersion": "3.3.4",
-  "updatedAt": "2021-03-31T16:18:16.541Z",
+  "updatedAt": "2021-04-24T20:41:31.609Z",
   "devdoc": {
     "details": "Elliptic Curve Digital Signature Algorithm (ECDSA) operations. These functions can be used to verify that a message was signed by the holder of the private keys of a given address.",
     "kind": "dev",

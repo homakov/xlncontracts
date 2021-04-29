@@ -31,19 +31,17 @@ contract XLN is Console {
     bytes sig; 
   }
 
-  /*
-  struct Lock {
+  struct Hashlock {
     uint amount;
     uint until_block;
     bytes32 hash;
   }
-  */
-
+  
   struct Entry {
     uint asset_id;
     int offdelta;
-    //Lock[] left_locks;
-    //Lock[] right_locks;
+    Hashlock[] left_locks;
+    Hashlock[] right_locks;
   }
 
   struct CooperativeProof{
@@ -128,24 +126,24 @@ contract XLN is Console {
     
     assets.push(Asset({
       name: "WETH",
-      addr: msg.sender
+      addr: 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
     }));
 
     assets.push(Asset({
       name: "DAI",
-      addr: msg.sender
+      addr: 0x6B175474E89094C44Da98b954EedeAC495271d0F
     }));
 
     log("now assets ",assets.length);
 
     // empty hub, hub_id=0 means not a hub
     hubs.push(Hub({
-      addr: 0x0000000000000000000000000000000000000000,
+      addr: address(0),
       uri: '',
       gasused: 0
     }));
     
-    registerHub(0, "http://127.0.0.1:8000");
+    registerHub(0, "ws://127.0.0.1:8400");
 
     topUp(msg.sender, 0, 100000000);
     topUp(msg.sender, 1, 100000000);
@@ -260,14 +258,14 @@ contract XLN is Console {
     bool sender_is_left = msg.sender < params.partner;
     bytes memory ch_key = channelKey(msg.sender, params.partner);
 
-    bytes memory encoded_msg = abi.encode(MessageType.WithdrawProof,ch_key,  channels[ch_key].channel_counter, channels[ch_key].cooperative_nonce, params.pairs);
+    bytes memory encoded_msg = abi.encode(MessageType.WithdrawProof, ch_key, channels[ch_key].channel_counter, channels[ch_key].cooperative_nonce, params.pairs);
 
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
 
     log('Encoded msg', encoded_msg);
     
     if(params.partner != ECDSA.recover(hash, params.sig)) {
-      log("Invalid signer ", params.partner);
+      log("Invalid signer ", ECDSA.recover(hash, params.sig));
       return false;
     }
 
@@ -300,10 +298,11 @@ contract XLN is Console {
     bytes memory encoded_msg = abi.encode(MessageType.CooperativeProof, ch_key, channels[ch_key].channel_counter, channels[ch_key].cooperative_nonce, params.entries);
 
     bytes32 hash = ECDSA.toEthSignedMessageHash(keccak256(encoded_msg));
-    log('Encoded msg',encoded_msg);
+    log('Encoded hash', hash);
+    log('Encoded msg', encoded_msg);
 
     if(params.partner != ECDSA.recover(hash, params.sig)) {
-      log("Invalid signer ", params.partner);
+      log("Invalid signer ", ECDSA.recover(hash, params.sig));
       return false;
     }
 
@@ -454,9 +453,9 @@ contract XLN is Console {
   }
 
 
-  // triggered automatically before every reserveToChannel
-  // can be called manually if the partner is offline
-  // iterates over debts claims, first-in-first-out 
+  // triggered automatically before every reserveToChannel/reserveToToken 
+  // can be called manually
+  // iterates over debts starting from current debtIndex, first-in-first-out 
   function enforceDebts(address addr, uint asset_id) public returns (uint totalDebts) {
     uint debtsLength = debts[addr][asset_id].length;
     if (debtsLength == 0) {
@@ -464,35 +463,35 @@ contract XLN is Console {
     }
    
     uint memoryReserve = reserves[addr][asset_id]; 
-    uint memoryIndex = debtIndex[addr][asset_id];
+    uint memoryDebtIndex = debtIndex[addr][asset_id];
     
     if (memoryReserve == 0){
       // the user has nothing, try again later
-      return debtsLength - memoryIndex;
+      return debtsLength - memoryDebtIndex;
     }
     
     while (true) {
-      Debt storage debt = debts[addr][asset_id][memoryIndex];
+      Debt storage debt = debts[addr][asset_id][memoryDebtIndex];
       
       if (memoryReserve >= debt.amount) {
         // can pay this debt off in full
         memoryReserve -= debt.amount;
         reserves[debt.pay_to][asset_id] += debt.amount;
 
-        delete debts[addr][asset_id][memoryIndex];
+        delete debts[addr][asset_id][memoryDebtIndex];
 
-        // last debt paid off, the user is debt free now
-        if (memoryIndex+1 == debtsLength) {
-          memoryIndex = 0;
+        // last debt was paid off, the user is debt free now
+        if (memoryDebtIndex+1 == debtsLength) {
+          memoryDebtIndex = 0;
           // resets .length to 0
           delete debts[addr][asset_id]; 
           debtsLength = 0;
           break;
         }
-        memoryIndex++;
+        memoryDebtIndex++;
         
       } else {
-        // pay off part of the debt
+        // pay off the debt partially and break the loop
         reserves[debt.pay_to][asset_id] += memoryReserve;
         debt.amount -= memoryReserve;
         memoryReserve = 0;
@@ -502,9 +501,9 @@ contract XLN is Console {
 
     // put memory variables back to storage
     reserves[addr][asset_id] = memoryReserve;
-    debtIndex[addr][asset_id] = memoryIndex;
+    debtIndex[addr][asset_id] = memoryDebtIndex;
     
-    return debtsLength - memoryIndex;
+    return debtsLength - memoryDebtIndex;
   }
 
 
@@ -524,19 +523,22 @@ contract XLN is Console {
     ReserveToToken[] reserveToToken;
     TokenToReserve[] tokenToReserve;
     ReserveToReserve[] reserveToReserve;
+    
 
     bytes32[] revealSecret;
+    bytes32[] cleanSecret;
     uint hub_id;
   }
 
 
 
   // hubs use onchain in batched fashion
-  function processBatch(Batch calldata b) public returns (bool completeSuccess) {
+  function processBatch(Batch memory b) public returns (bool completeSuccess) {
+    
     uint startGas = gasleft();
 
-    // the order is important: first go ones that increase reserve
-    // then those that deduct from reserve
+    // the order is important: first go methods that increase reserve
+    // then methods that deduct from reserve
 
     completeSuccess = true; 
 
@@ -570,9 +572,13 @@ contract XLN is Console {
         completeSuccess = false;
       }
     }
-
+    
     for (uint i = 0; i < b.revealSecret.length; i++) {
       revealSecret(b.revealSecret[i]);
+    }
+
+    for (uint i = 0; i < b.cleanSecret.length; i++) {
+      cleanSecret(b.cleanSecret[i]);
     }
 
     // increase gasused for hubs
@@ -582,6 +588,7 @@ contract XLN is Console {
     }
 
     return completeSuccess;
+    
   }
 
   function channelKey(address a1, address a2) public pure returns (bytes memory) {
@@ -623,7 +630,7 @@ contract XLN is Console {
     Collateral[] collaterals;
   }
   
-  // sync many channels around single addr
+  // get many channels around one address
   function getChannels(address  addr, address[] memory partners) public view returns ( ChannelReturn[] memory response) {
     bytes memory ch_key;
 
@@ -648,6 +655,13 @@ contract XLN is Console {
     return response;
 
     
+  }
+
+  function getAllHubs () public view returns (Hub[] memory) {
+    return hubs;
+  }
+  function getAllAssets () public view returns (Asset[] memory) {
+    return assets;
   }
   
   // dev-only helpers

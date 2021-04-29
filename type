@@ -1,3 +1,5 @@
 truffle migrate
-npx typechain --target=truffle-v5 "build/contracts/*.json"
-cp -R types ../f/types
+npx typechain --target=ethers-v5 "build/contracts/**/*.json"
+
+cp -a ./types/. ../f/types
+
