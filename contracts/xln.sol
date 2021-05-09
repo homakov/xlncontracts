@@ -325,6 +325,8 @@ contract XLN is Console {
 
     bytes memory ch_key = abi.encodePacked(l_user, r_user);
 
+    //uint[][] memory outcomes;
+
     logChannel(l_user, r_user);
 
     // iterate over entries and split the assets
@@ -340,6 +342,9 @@ contract XLN is Console {
         uint left_gets = uint(delta);
         reserves[l_user][asset_id] += left_gets;
         reserves[r_user][asset_id] += col.collateral - left_gets;
+
+        //l_reserves.push(asset_id);
+        //r_reserves.push(asset_id);
 
       } else {
         // one user gets entire collateral, another gets debt (resolution enabled by XLN)
